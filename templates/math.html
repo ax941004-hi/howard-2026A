@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>簡易計算機</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 300px; padding: 20px; border: 1px solid #ccc; border-radius: 8px; }
+        input, select, button { width: 100%; margin: 10px 0; padding: 8px; box-sizing: border-box; }
+        #result { font-weight: bold; color: blue; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h3>簡易計算機</h3>
+    <input type="number" id="x" placeholder="請輸入 x">
+    
+    <select id="opt">
+        <option value="+">+</option>
+        <option value="-">-</option>
+        <option value="*">*</option>
+        <option value="/">/</option>
+    </select>
+    
+    <input type="number" id="y" placeholder="請輸入 y">
+    
+    <button onclick="calculate()">計算結果</button>
+
+    <p id="displayText">結果將顯示於此</p>
+</div>
+
+<script>
+    function calculate() {
+        // 取得輸入值
+        const x = parseFloat(document.getElementById('x').value);
+        const y = parseFloat(document.getElementById('y').value);
+        const opt = document.getElementById('opt').value;
+        const display = document.getElementById('displayText');
+
+        // 檢查是否為數字
+        if (isNaN(x) || isNaN(y)) {
+            display.innerText = "請請輸入有效的數字";
+            return;
+        }
+
+        let result;
+        
+        // 邏輯判斷 (對應你的 Python 邏輯)
+        if (opt === "/" && y === 0) {
+            display.innerText = "除數不可為 0";
+            return;
+        }
+
+        switch (opt) {
+            case "+": result = x + y; break;
+            case "-": result = x - y; break;
+            case "*": result = x * y; break;
+            case "/": result = x / y; break;
+        }
+
+        // 顯示結果
+        display.innerText = `${x} ${opt} ${y} 的結果是 ${result}`;
+    }
+</script>
+
+</body>
+</html>
