@@ -33,8 +33,8 @@ def index():
     link += "<a href=/account>帳號密碼</a><hr>"
     link += "<a href=/math>數學計算</a><hr>"
     link += "<a href=/cup>擲杯</a><hr>"
-    link += "<a href=/read>讀取Firestore資料(根據lab遞減排序，取前4筆)</a><br>"
-    link += "<a href=/search>作業老師辦公室查詢</a><br>"
+    link += "<a href=/read>讀取Firestore資料(根據lab遞減排序，取前4筆)</a><br><hr>"
+    link += "<a href=/search>作業老師辦公室查詢</a><br><hr>"
 
 
     return link
