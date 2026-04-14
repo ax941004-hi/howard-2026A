@@ -1,3 +1,21 @@
+import os
+import json
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# 判斷是在 Vercel 還是本地
+if os.path.exists('serviceAccountKey.json'):
+    # 本地環境：讀取檔案
+    cred = credentials.Certificate('serviceAccountKey.json')
+else:
+    # 雲端環境：從環境變數讀取 JSON 字串
+    firebase_config = os.getenv('FIREBASE_CONFIG')
+    cred_dict = json.loads(firebase_config)
+    cred = credentials.Certificate(cred_dict)
+
+firebase_admin.initialize_app(cred)
+
+
 import firebase_admin
 
 from flask import Flask, render_template,request
@@ -15,6 +33,10 @@ def index():
     link += "<a href=/account>帳號密碼</a><hr>"
     link += "<a href=/math>數學計算</a><hr>"
     link += "<a href=/cup>擲杯</a><hr>"
+    link += "<a href=/read>讀取Firestore資料(根據lab遞減排序，取前4筆)</a><br>"
+    link += "<a href=/search>作業老師辦公室查詢</a><br>"
+
+
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
@@ -83,6 +105,56 @@ def today():
 @app.route("/about")
 def about():
     return render_template("MIS2A.html")
+
+@app.route("/read")
+def read():
+    # 這個路由維持原樣：只負責列出前 4 筆
+    db = firestore.client()
+    Temp = "<h3>前 4 筆老師資料：</h3>"
+    collection_ref = db.collection("靜宜資管2026a")
+    docs = collection_ref.order_by("lab", direction=firestore.Query.DESCENDING).limit(4).get()
+    for doc in docs:
+        Temp += str(doc.to_dict()) + "<br>"
+    return Temp + "<br><a href='/'>回首頁</a>"
+
+@app.route("/search", methods=["GET", "POST"])
+def search():
+    db = firestore.client()
+    collection_ref = db.collection("靜宜資管2026a")
+    
+    # 修正重點 1：action 改成 "/search"，讓表單送回自己這個路由
+    html_form = """
+        <form method="GET" action="/search">
+            <label>請輸入老師姓名關鍵字：</label>
+            <input type="text" name="kw">
+            <button type="submit">查詢</button>
+        </form>
+        <hr>
+    """
+    
+    keyword = request.args.get("kw")
+    result_text = ""
+    
+    if keyword:
+        docs = collection_ref.get()
+        found = False
+        for doc in docs:
+            user = doc.to_dict()
+            name = user.get("name", "")
+            lab = user.get("lab", "不詳")
+            
+            # 修正重點 2：搜尋邏輯
+            if keyword in name:
+                result_text += f"<h3>✅ 找到囉！{name} 老師研究室在：{lab}</h3>"
+                found = True
+        
+        if not found:
+            result_text = f"<p style='color:red;'>❌ 找不到包含「{keyword}」的老師。</p>"
+    else:
+        result_text = "<p>提示：請在上方輸入框輸入名字。</p>"
+    
+    return html_form + result_text + "<br><a href='/'>回首頁</a>"
+
 if __name__ == "__main__":
     app.run(debug=True)
 
