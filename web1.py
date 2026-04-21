@@ -1,3 +1,6 @@
+import requests
+from bs4 import BeautifulSoup
+
 import os
 import json
 import firebase_admin
@@ -35,7 +38,7 @@ def index():
     link += "<a href=/cup>擲杯</a><hr>"
     link += "<a href=/read>讀取Firestore資料(根據lab遞減排序，取前4筆)</a><br><hr>"
     link += "<a href=/search>作業老師辦公室查詢</a><br><hr>"
-
+    link += "<a href=/sp1>爬蟲</a><hr>"
 
     return link
     return "歡迎進入郭澔澄的網站首頁2"
@@ -43,7 +46,11 @@ def index():
 @app.route("/mis")
 def course():
     return '<h1>資訊管理導論</h1><a href="/">回到網站</a>'
-
+@app.route("/sp1")
+def sp1():
+    R  = "20260421 郭澔澄"
+    return R
+    return '<h1>資訊管理導論</h1><a href="/">回到網站</a>'
 
 @app.route("/welcome",methods = ["GET"])
 def welcome():
