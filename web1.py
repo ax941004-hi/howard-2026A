@@ -39,18 +39,73 @@ def index():
     link += "<a href=/read>讀取Firestore資料(根據lab遞減排序，取前4筆)</a><br><hr>"
     link += "<a href=/search>作業老師辦公室查詢</a><br><hr>"
     link += "<a href=/sp1>爬蟲</a><hr>"
-
+    link += "<a href=/movie>查詢即將上映電影</a><hr>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
 @app.route("/mis")
 def course():
     return '<h1>資訊管理導論</h1><a href="/">回到網站</a>'
+
+@app.route("/movie")
+def movie():
+    url = "https://www.atmovies.com.tw/movie/next/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    try:
+        data = requests.get(url, headers=headers)
+        data.encoding = "utf-8"
+        sp = BeautifulSoup(data.text, "html.parser")
+        
+        # 根據開眼電影網結構抓取 li
+        result = sp.select(".filmListAllX li")
+        
+        html_content = "<h1>即將上映電影</h1><ul>"
+        
+        for item in result:
+            try:
+                # 抓取電影名稱 (從 img 的 alt)
+                name = item.find("img").get("alt")
+                # 抓取超連結
+                link = "https://www.atmovies.com.tw" + item.find("a").get("href")
+                
+                # 組合為 HTML 列表項目
+                html_content += f'<li><a href="{link}" target="_blank">{name}</a></li>'
+            except Exception:
+                continue
+        
+        html_content += "</ul>"
+        html_content += '<br><a href="/">回到首頁</a>'
+        
+        return html_content
+    except Exception as e:
+        return f"擷取資料失敗: {e}"
+
+
 @app.route("/sp1")
 def sp1():
-    R  = "20260421 郭澔澄"
-    return R
-    return '<h1>資訊管理導論</h1><a href="/">回到網站</a>'
+    R  = ""
+
+    url = "https://howard-2026-a.vercel.app/about"
+    Data = requests.get(url)
+    Data.encoding = "utf-8"
+    #print(Data.text)
+    sp = BeautifulSoup(Data.text, "html.parser")
+    #result=sp.select("td a")
+    result=sp.select("td a")
+    print(result)
+        
+    for item in result:
+        #print(item.text)
+        #print(item.get("href"))
+        #print(item)
+        #print(item.get("src"))
+        R += item.text + "<br>" + item.get("href") + "<br><br>"
+    return R + "<br><a href='/'>回首頁</a>"
+   
+   
 
 @app.route("/welcome",methods = ["GET"])
 def welcome():
