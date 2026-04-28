@@ -6,6 +6,8 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+
+
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
     # 本地環境：讀取檔案
@@ -40,6 +42,8 @@ def index():
     link += "<a href=/search>作業老師辦公室查詢</a><br><hr>"
     link += "<a href=/sp1>爬蟲</a><hr>"
     link += "<a href=/movie>查詢即將上映電影</a><hr>"
+    link += "<br><a href=/movie2>讀取開眼電影即將上映影片，寫入Firestore</a><hr><br>"
+    link += "<br><a href=/movie3>輸入關鍵字,查詢相關電影資訊</a><hr><br>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
@@ -82,8 +86,98 @@ def movie():
         return html_content
     except Exception as e:
         return f"擷取資料失敗: {e}"
+@app.route("/movie2")
+def movie2():
+    url = "http://www.atmovies.com.tw/movie/next/"
+    Data = requests.get(url)
+    Data.encoding = "utf-8"
+
+    sp = BeautifulSoup(Data.text, "html.parser")
+    updateDate = sp.find("div",class_="smaller09 grey center").text.replace("更新時間：", "")
+
+    result=sp.select(".filmListAllX li")
+    info = ""
+    for item in result:
+
+      picture = item.find("img").get("src").replace(" ", "")
+      title = item.find("div", class_="filmtitle").text
+
+      movie_id = item.find("div", class_="filmtitle").find("a").get("href").replace("/", "").replace("movie", "")
+      
+      hyperlink = "http://www.atmovies.com.tw" + item.find("div", class_="filmtitle").find("a").get("href")
+      show = item.find("div", class_="runtime").text.replace("上映日期：", "")
+      if "片長" in show: 
+        show = show.replace("片長：", "")
+        show = show.replace("分", "")
+        showDate = show[0:10]
+        showLength = show[13:].replace(" ","")
+      else:   
+        showLength = "尚無片場資訊"
+      info += movie_id + "\n" + picture + "\n" + title + "\n" + hyperlink + "\n" + showDate + "\n" + showLength + "\n\n"
+
+      doc = {
+          "title": title,
+          "picture": picture,
+          "hyperlink": hyperlink,
+          "showDate": showDate,
+          "showLength": showLength,
+          "lastUpdate": updateDate
+      }
+
+      db = firestore.client()
+      doc_ref = db.collection("電影2A").document(movie_id)
+      doc_ref.set(doc)
 
 
+    info += updateDate + "\n\n" 
+ # 把最後一行的 lastUpdate 改成 updateDate
+    return "近期上映電影已爬蟲及存檔完畢，網站最近更新日期為：" + updateDate
+
+
+
+from flask import request
+
+@app.route("/movie3")
+def movie3():
+    # 1. 取得網址參數 keyword，例如：/movie3?keyword=沙丘
+    keyword = request.args.get("keyword")
+    
+    # 2. 如果使用者沒輸入關鍵字，回傳你想要的提示訊息（含超連結）
+    if not keyword:
+        return """
+            <h2>電影關鍵字查詢</h2>
+            <form action="/movie3" method="get">
+                <input type="text" name="keyword" placeholder="請輸入電影名稱 (例如：沙丘)">
+                <button type="submit">開始查詢</button>
+            </form>
+        """
+    # 3. 連接 Firebase 抓取「電影2A」的資料
+    db = firestore.client()
+    movies_ref = db.collection("電影2A")
+    docs = movies_ref.stream()
+
+    info = f"<h3>關於『{keyword}』的查詢結果：</h3><hr>"
+    found = False
+
+    # 4. 跑迴圈找出符合關鍵字的電影
+    for doc in docs:
+        movie = doc.to_dict()
+        title = movie.get("title", "")
+        
+        # 判斷標題是否包含關鍵字
+        if keyword in title:
+            found = True
+            info += f"<b>電影名稱：</b>{title}<br>"
+            info += f"<b>上映日期：</b>{movie.get('showDate', '暫無資料')}<br>"
+            info += f"<b>片長：</b>{movie.get('showLength', '暫無資料')}<br>"
+            info += f"<b>詳細介紹：</b><a href='{movie.get('hyperlink')}' target='_blank'>開眼電影網網址</a><br>"
+            info += f"<img src='{movie.get('picture')}' width='200'><br><hr>"
+
+    # 5. 如果整個資料庫都翻完了還是沒找到
+    if not found:
+        return f"抱歉，資料庫中找不到包含『{keyword}』的電影。"
+
+    return info
 @app.route("/sp1")
 def sp1():
     R  = ""
