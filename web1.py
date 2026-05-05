@@ -42,8 +42,10 @@ def index():
     link += "<a href=/search>作業老師辦公室查詢</a><br><hr>"
     link += "<a href=/sp1>爬蟲</a><hr>"
     link += "<a href=/movie>查詢即將上映電影</a><hr>"
-    link += "<br><a href=/movie2>讀取開眼電影即將上映影片，寫入Firestore</a><hr><br>"
-    link += "<br><a href=/movie3>輸入關鍵字,查詢相關電影資訊</a><hr><br>"
+    link += "<a href=/movie2>讀取開眼電影即將上映影片，寫入Firestore</a><hr>"
+    link += "<a href=/movie3>輸入關鍵字,查詢相關電影資訊</a><hr>"
+    link += "<a href=/road>113交通事故</a><hr>"
+    link += "<a href=/weather>天氣查詢</a><hr>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
@@ -139,43 +141,52 @@ from flask import request
 
 @app.route("/movie3")
 def movie3():
-    # 1. 取得網址參數 keyword，例如：/movie3?keyword=沙丘
-    keyword = request.args.get("keyword")
+    # 1. 取得參數並去除前後空白
+    keyword = request.args.get("keyword", "").strip()
     
-    # 2. 如果使用者沒輸入關鍵字，回傳你想要的提示訊息（含超連結）
+    # 2. 如果沒輸入關鍵字，顯示搜尋表單
     if not keyword:
         return """
             <h2>電影關鍵字查詢</h2>
             <form action="/movie3" method="get">
-                <input type="text" name="keyword" placeholder="請輸入電影名稱 (例如：沙丘)">
+                <input type="text" name="keyword" placeholder="請輸入關鍵字 (如：沙)">
                 <button type="submit">開始查詢</button>
             </form>
         """
-    # 3. 連接 Firebase 抓取「電影2A」的資料
+
+    # 3. 連接 Firebase
     db = firestore.client()
     movies_ref = db.collection("電影2A")
     docs = movies_ref.stream()
 
-    info = f"<h3>關於『{keyword}』的查詢結果：</h3><hr>"
+    # 準備回傳的 HTML 內容
+    info = f"<h3>關於『{keyword}』的查詢結果：</h3>"
+    info += '<a href="/movie3">← 重新查詢</a><br><hr>'
     found = False
 
-    # 4. 跑迴圈找出符合關鍵字的電影
+    # 4. 跑迴圈比對
     for doc in docs:
         movie = doc.to_dict()
         title = movie.get("title", "")
         
-        # 判斷標題是否包含關鍵字
-        if keyword in title:
+        # 【優化點】轉成小寫比對，實現更寬鬆的模糊搜尋
+        if keyword.lower() in title.lower():
             found = True
             info += f"<b>電影名稱：</b>{title}<br>"
             info += f"<b>上映日期：</b>{movie.get('showDate', '暫無資料')}<br>"
             info += f"<b>片長：</b>{movie.get('showLength', '暫無資料')}<br>"
-            info += f"<b>詳細介紹：</b><a href='{movie.get('hyperlink')}' target='_blank'>開眼電影網網址</a><br>"
-            info += f"<img src='{movie.get('picture')}' width='200'><br><hr>"
+            # 防止圖片或連結不存在時程式出錯
+            link = movie.get('hyperlink', '#')
+            img_url = movie.get('picture', '')
+            
+            info += f"<b>詳細介紹：</b><a href='{link}' target='_blank'>開眼電影網網址</a><br>"
+            if img_url:
+                info += f"<img src='{img_url}' width='200'><br>"
+            info += "<hr>"
 
-    # 5. 如果整個資料庫都翻完了還是沒找到
+    # 5. 沒找到時的處理
     if not found:
-        return f"抱歉，資料庫中找不到包含『{keyword}』的電影。"
+        return f"<h3>抱歉，找不到包含『{keyword}』的電影。</h3><a href='/movie3'>返回搜尋</a>"
 
     return info
 @app.route("/sp1")
@@ -310,6 +321,69 @@ def search():
         result_text = "<p>提示：請在上方輸入框輸入名字。</p>"
     
     return html_form + result_text + "<br><a href='/'>回首頁</a>"
+
+@app.route("/road")
+def road():
+    R  = ""
+    url = "https://newdatacenter.taichung.gov.tw/api/v1/no-auth/resource.download?rid=a1b899c0-511f-4e3d-b22b-814982a97e41"
+    Data = requests.get(url)
+    #print(Data.text)
+
+    JsonData = json.loads(Data.text)
+    for item in JsonData:
+        R += item["路口名稱"] + ",總共發生" + item["總件數"] + "件事故<br>"
+    return R + "<br><a href='/'>回首頁</a>"
+
+@app.route("/weather")
+def weather():
+    # 1. 從網址取得城市參數，預設為 "臺中市"
+    city = request.args.get("city", "臺中市")
+    city = city.replace("台", "臺")  # 統一轉換為「臺」以利 API 查詢
+
+    # 2. CWA API 網址 (使用你圖片中的 Authorization Key)
+    url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore/F-C0032-001?Authorization=rdec-key-123-45678-011121314&format=JSON&locationName=" + city
+
+    try:
+        data = requests.get(url)
+        json_data = data.json()
+
+        # 3. 檢查是否有抓到資料（避免輸入錯誤城市名導致當機）
+        if not json_data["records"]["location"]:
+            return f"<h3>找不到「{city}」的天氣資料，請檢查城市名稱是否正確。</h3><a href='/'>回首頁</a>"
+
+        # 4. 解析氣象資料 (參考你圖片中的路徑)
+        location_data = json_data["records"]["location"][0]
+        
+        # 天氣現象 (Wx)
+        weather_state = location_data["weatherElement"][0]["time"][0]["parameter"]["parameterName"]
+        
+        # 降雨機率 (PoP)
+        rain_chance = location_data["weatherElement"][1]["time"][0]["parameter"]["parameterName"]
+        
+        # 最低溫度 (MinT) - 額外增加的功能，讓資訊更完整
+        min_temp = location_data["weatherElement"][2]["time"][0]["parameter"]["parameterName"]
+        
+        # 最高溫度 (MaxT)
+        max_temp = location_data["weatherElement"][4]["time"][0]["parameter"]["parameterName"]
+
+        # 5. 組合 HTML 介面
+        html = f"""
+            <h2>{city} 目前天氣預報</h2>
+            <form action="/weather" method="get">
+                切換縣市：<input type="text" name="city" placeholder="例如：臺北市">
+                <button type="submit">查詢</button>
+            </form>
+            <hr>
+            <p><b>天氣狀況：</b> {weather_state}</p>
+            <p><b>降雨機率：</b> {rain_chance}%</p>
+            <p><b>氣溫區間：</b> {min_temp}°C - {max_temp}°C</p>
+            <br>
+            <a href="/">回首頁</a>
+        """
+        return html
+
+    except Exception as e:
+        return f"天氣資料抓取失敗：{e} <br><a href='/'>回首頁</a>"
 
 if __name__ == "__main__":
     app.run(debug=True)
