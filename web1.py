@@ -51,31 +51,45 @@ def index():
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # build a request object
+    # 建立請求物件
     req = request.get_json(force=True)
-    # fetch queryResult from json
-    action =  req["queryResult"]["action"]
-    #msg =  req.get("queryResult").get("queryText")
-    #info = "我是郭澔澄設計的電影聊天機器人：" + action + "； 查詢內容：" + msg
-    if (action == "rateChoice"):
-    rate =  req["queryResult"]["parameters"]["rate"]
-    info = "我是郭澔澄設計的電影聊天機器人，您選擇的電影分級是：" + rate + "，相關電影：\n"
- 
-    db = firestore.client()
-    collection_ref = db.collection("電影含分級")
-    docs = collection_ref.get()
-    result = ""
-    for doc in docs:
-        dict = doc.to_dict()
-        if rate in dict["rate"]:
-            result += "片名：" + dict["title"] + "\n"
-            result += "介紹：" + dict["hyperlink"] + "\n\n"
-    info += result
+    
+    # 從 JSON 提取 action
+    action = req.get("queryResult").get("action")
+    
+    if action == "rateChoice":
+        # 獲取 Dialogflow 傳來的分級參數
+        rate = req.get("queryResult").get("parameters").get("rate")
+        
+        # 初始化回應字串
+        info = f"我是郭澔澄設計的電影聊天機器人，您選擇的電影分級是：{rate}，相關電影：\n\n"
+        
+        # 連結資料庫
+        db = firestore.client()
+        collection_ref = db.collection("電影含分級")
+        
+        # 優化查詢：直接利用 where 過濾分級，節省效能
+        docs = collection_ref.where("rate", "==", rate).get()
+        
+        result = ""
+        for doc in docs:
+            movie_data = doc.to_dict()
+            result += f"🎬 片名：{movie_data.get('title')}\n"
+            result += f"🔗 介紹：{movie_data.get('hyperlink')}\n\n"
+        
+        # 如果沒找到相關電影的處理
+        if not result:
+            result = "目前找不到此分級的相關電影。"
+            
+        info += result
 
-    return make_response(jsonify({"fulfillmentText": info}))
+        # 回傳給 Dialogflow
+        return make_response(jsonify({"fulfillmentText": info}))
+
+    # 若 action 不匹配的回應
+    return make_response(jsonify({"fulfillmentText": "收到請求，但未執行特定動作。"}))
 
 @app.route("/mis")
 def course():
