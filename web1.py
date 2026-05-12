@@ -51,45 +51,44 @@ def index():
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
+
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # 建立請求物件
     req = request.get_json(force=True)
-    
-    # 從 JSON 提取 action
     action = req.get("queryResult").get("action")
     
     if action == "rateChoice":
-        # 獲取 Dialogflow 傳來的分級參數
-        rate = req.get("queryResult").get("parameters").get("rate")
+        # 取得參數，並確保它是字串
+        rate = str(req.get("queryResult").get("parameters").get("rate")).strip()
         
-        # 初始化回應字串
         info = f"我是郭澔澄設計的電影聊天機器人，您選擇的電影分級是：{rate}，相關電影：\n\n"
         
-        # 連結資料庫
         db = firestore.client()
         collection_ref = db.collection("電影含分級")
         
-        # 優化查詢：直接利用 where 過濾分級，節省效能
-        docs = collection_ref.where("rate", "==", rate).get()
+        # 1. 先抓取所有文件進行比對 (因為您的 rate 欄位可能是 list 或格式稍有不同)
+        docs = collection_ref.get()
         
         result = ""
         for doc in docs:
             movie_data = doc.to_dict()
-            result += f"🎬 片名：{movie_data.get('title')}\n"
-            result += f"🔗 介紹：{movie_data.get('hyperlink')}\n\n"
+            # 取得資料庫中的分級欄位 (確保轉為字串方便比對)
+            db_rate = str(movie_data.get("rate", ""))
+            
+            # 使用 in 來判斷，增加容錯性 (例如資料庫存 "普遍級(G)"，使用者輸入 "G")
+            if rate in db_rate:
+                result += f"🎬 片名：{movie_data.get('title')}\n"
+                result += f"🔗 介紹：{movie_data.get('hyperlink')}\n\n"
         
-        # 如果沒找到相關電影的處理
         if not result:
-            result = "目前找不到此分級的相關電影。"
+            # 偵錯用：如果沒抓到，顯示資料庫裡隨便一筆的分級長怎樣，方便你檢查
+            sample = docs[0].to_dict().get("rate") if docs else "無資料"
+            result = f"目前找不到符合 '{rate}' 的電影。\n(檢查資料庫格式：{sample})"
             
         info += result
-
-        # 回傳給 Dialogflow
         return make_response(jsonify({"fulfillmentText": info}))
 
-    # 若 action 不匹配的回應
-    return make_response(jsonify({"fulfillmentText": "收到請求，但未執行特定動作。"}))
+    return make_response(jsonify({"fulfillmentText": "未觸發正確動作"}))
 
 @app.route("/mis")
 def course():
