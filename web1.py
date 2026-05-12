@@ -58,37 +58,35 @@ def webhook():
     action = req.get("queryResult").get("action")
     
     if action == "rateChoice":
-        # 取得參數，並確保它是字串
-        rate = str(req.get("queryResult").get("parameters").get("rate")).strip()
+        # 取得 Dialogflow 傳來的分級 (例如: "輔12級")
+        rate = req.get("queryResult").get("parameters").get("rate")
         
-        info = f"我是郭澔澄設計的電影聊天機器人，您選擇的電影分級是：{rate}，相關電影：\n\n"
+        info = f"我是郭澔澄設計的電影聊天機器人，您選擇的分級是：{rate}，相關電影：\n\n"
         
         db = firestore.client()
-        collection_ref = db.collection("電影含分級")
+        # 修正點 1: 集合名稱改為圖片中的 "本週新片含分級"
+        collection_ref = db.collection("本週新片含分級")
         
-        # 1. 先抓取所有文件進行比對 (因為您的 rate 欄位可能是 list 或格式稍有不同)
-        docs = collection_ref.get()
+        # 修正點 2: 使用精確查詢 (Firestore 裡的 rate 存的是 "輔12級" 這種完整字串)
+        docs = collection_ref.where("rate", "==", rate).get()
         
         result = ""
         for doc in docs:
             movie_data = doc.to_dict()
-            # 取得資料庫中的分級欄位 (確保轉為字串方便比對)
-            db_rate = str(movie_data.get("rate", ""))
+            # 修正點 3: 欄位名稱要跟圖片右側欄位一模一樣
+            title = movie_data.get("title", "未知片名")
+            picture = movie_data.get("picture", "#")
             
-            # 使用 in 來判斷，增加容錯性 (例如資料庫存 "普遍級(G)"，使用者輸入 "G")
-            if rate in db_rate:
-                result += f"🎬 片名：{movie_data.get('title')}\n"
-                result += f"🔗 介紹：{movie_data.get('hyperlink')}\n\n"
+            result += f"🎬 片名：{title}\n"
+            result += f"🔗 圖片/連結：{picture}\n\n"
         
         if not result:
-            # 偵錯用：如果沒抓到，顯示資料庫裡隨便一筆的分級長怎樣，方便你檢查
-            sample = docs[0].to_dict().get("rate") if docs else "無資料"
-            result = f"目前找不到符合 '{rate}' 的電影。\n(檢查資料庫格式：{sample})"
+            result = f"找不到符合 {rate} 的電影，請確認分級輸入是否正確（例如：輔12級）。"
             
         info += result
         return make_response(jsonify({"fulfillmentText": info}))
 
-    return make_response(jsonify({"fulfillmentText": "未觸發正確動作"}))
+    return make_response(jsonify({"fulfillmentText": "Action 不匹配"}))
 
 @app.route("/mis")
 def course():
