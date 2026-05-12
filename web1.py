@@ -5,6 +5,7 @@ import os
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
+from flask import Flask, render_template, request, make_response, jsonify
 
 
 
@@ -49,6 +50,17 @@ def index():
     link += "<a href=/rate>本週新片進DB</a><hr>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
+
+
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    # build a request object
+    req = request.get_json(force=True)
+    # fetch queryResult from json
+    action =  req.get("queryResult").get("action")
+    msg =  req.get("queryResult").get("queryText")
+    info = "動作：" + action + "； 查詢內容：" + msg
+    return make_response(jsonify({"fulfillmentText": info}))
 
 @app.route("/mis")
 def course():
