@@ -48,6 +48,7 @@ def index():
     link += "<a href=/road>113交通事故</a><hr>"
     link += "<a href=/weather>天氣查詢</a><hr>"
     link += "<a href=/rate>本週新片進DB</a><hr>"
+    link += "<a href=/demo>對話框</a><hr>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
@@ -92,6 +93,9 @@ def webhook():
 def course():
     return '<h1>資訊管理導論</h1><a href="/">回到網站</a>'
 
+@app.route("/demo")
+def demo():
+    return render_template("demo.HTML")
 @app.route("/movie")
 def movie():
     url = "https://www.atmovies.com.tw/movie/next/"
