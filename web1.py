@@ -95,7 +95,7 @@ def course():
 
 @app.route("/demo")
 def demo():
-    return render_template("demo.HTML")
+    return render_template("demo.html")
 @app.route("/movie")
 def movie():
     url = "https://www.atmovies.com.tw/movie/next/"
