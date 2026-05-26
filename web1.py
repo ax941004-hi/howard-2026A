@@ -50,6 +50,7 @@ def index():
     link += "<a href=/weather>天氣查詢</a><hr>"
     link += "<a href=/rate>本週新片進DB</a><hr>"
     link += "<a href=/demo>對話框</a><hr>"
+    link += "<a href=/AI>Gemini</a><hr>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
