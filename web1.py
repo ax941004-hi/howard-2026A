@@ -6,6 +6,7 @@ import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from flask import Flask, render_template, request, make_response, jsonify
+from google import genai
 
 
 
@@ -489,6 +490,20 @@ def weather():
 
     except Exception as e:
         return f"天氣資料抓取失敗：{e} <br><a href='/'>回首頁</a>"
+
+
+client = genai.Client()
+@app.route("/AI")
+def AI():
+    # 每次使用者拜訪該路徑時，直接使用全域的 client 呼叫模型
+    response = client.models.generate_content(
+        model='gemini-3.5-flash',
+        contents='我想查詢靜宜大學資管系的評價？',
+    )
+    
+    # 回傳生成的文字
+    return response.text
+
 
 if __name__ == "__main__":
     app.run(debug=True)
