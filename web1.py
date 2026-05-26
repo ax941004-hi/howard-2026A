@@ -7,7 +7,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from flask import Flask, render_template, request, make_response, jsonify
 from google import genai
-
+from google.genai import types
 
 
 # 判斷是在 Vercel 還是本地
@@ -86,11 +86,24 @@ def webhook():
         
         if not result:
             result = f"找不到符合 {rate} 的電影，請確認分級輸入是否正確（例如：輔12級）。"
- 
+            
     
         info += result
     elif (action == "input.unknown"):
-        info =  req["queryResult"]["queryText"]
+        #info =  req["queryResult"]["queryText"]
+        # 2. 建立設定物件，設定你希望限制的最大 Token 數（例如 500）
+        ai_config = types.GenerateContentConfig(
+            max_output_tokens = 128
+        )
+
+        response = client.models.generate_content(
+            model='gemini-3.5-flash',
+            contents= req["queryResult"]["queryText"],
+            config=ai_config
+        )
+    
+    # 回傳生成的文字
+            info = response.text
     return make_response(jsonify({"fulfillmentText": info}))
 
     return make_response(jsonify({"fulfillmentText": "Action 不匹配"}))
