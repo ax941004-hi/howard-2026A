@@ -113,6 +113,10 @@ def webhook():
     # 統一在最外層回傳給 Dialogflow
     return make_response(jsonify({"fulfillmentText": info}))
 
+@app.route("/message")
+def message():
+    return render_template("message.html")
+
 @app.route("/mis")
 def course():
     return '<h1>資訊管理導論</h1><a href="/">回到網站</a>'
