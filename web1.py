@@ -94,7 +94,7 @@ def webhook():
     elif action == "input.unknown":
         # 設定希望限制的最大 Token 數
         ai_config = types.GenerateContentConfig(
-            max_output_tokens=2000
+            max_output_tokens=500
         )
 
         response = client.models.generate_content(
