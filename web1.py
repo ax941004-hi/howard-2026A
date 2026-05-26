@@ -52,7 +52,7 @@ def index():
     link += "<a href=/demo>對話框</a><hr>"
     link += "<a href=/AI>Gemini</a><hr>"
     link += "<a href=/ask>ask</a><hr>"
-    link += "<a href=/ask>message</a><hr>"
+    link += "<a href=/message>message</a><hr>"
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
