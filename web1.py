@@ -61,6 +61,9 @@ def webhook():
     req = request.get_json(force=True)
     action = req.get("queryResult").get("action")
     
+    # 預設回傳訊息，防止 action 都不匹配時報錯
+    info = "抱歉，我聽不懂你在說什麼。" 
+    
     if action == "rateChoice":
         # 取得 Dialogflow 傳來的分級 (例如: "輔12級")
         rate = req.get("queryResult").get("parameters").get("rate")
@@ -68,16 +71,15 @@ def webhook():
         info = f"我是郭澔澄設計的電影聊天機器人，您選擇的分級是：{rate}，相關電影：\n\n"
         
         db = firestore.client()
-        # 修正點 1: 集合名稱改為圖片中的 "本週新片含分級"
+        # 集合名稱改為 "本週新片含分級"
         collection_ref = db.collection("本週新片含分級")
         
-        # 修正點 2: 使用精確查詢 (Firestore 裡的 rate 存的是 "輔12級" 這種完整字串)
+        # 使用精確查詢
         docs = collection_ref.where("rate", "==", rate).get()
         
         result = ""
         for doc in docs:
             movie_data = doc.to_dict()
-            # 修正點 3: 欄位名稱要跟圖片右側欄位一模一樣
             title = movie_data.get("title", "未知片名")
             picture = movie_data.get("picture", "#")
             
@@ -87,26 +89,29 @@ def webhook():
         if not result:
             result = f"找不到符合 {rate} 的電影，請確認分級輸入是否正確（例如：輔12級）。"
             
-    
         info += result
-    elif (action == "input.unknown"):
-        #info =  req["queryResult"]["queryText"]
-        # 2. 建立設定物件，設定你希望限制的最大 Token 數（例如 500）
+
+    elif action == "input.unknown":
+        # 設定希望限制的最大 Token 數
         ai_config = types.GenerateContentConfig(
-            max_output_tokens = 128
+            max_output_tokens=500
         )
 
         response = client.models.generate_content(
-            model='gemini-3.5-flash',
-            contents= req["queryResult"]["queryText"],
+            model='gemini-2.5-flash', # 註：目前官方正式版為 2.5，若您有特殊管道使用 3.5 請保持原樣
+            contents=req["queryResult"]["queryText"],
             config=ai_config
         )
+        
+        # 修正縮排：確保 info 有正確賦值
+        info = response.text
     
-    # 回傳生成的文字
-            info = response.text
-    return make_response(jsonify({"fulfillmentText": info}))
+    else:
+        # 當 action 都不匹配時的處理
+        info = "Action 不匹配，無法處理此請求。"
 
-    return make_response(jsonify({"fulfillmentText": "Action 不匹配"}))
+    # 統一在最外層回傳給 Dialogflow
+    return make_response(jsonify({"fulfillmentText": info}))
 
 @app.route("/mis")
 def course():
