@@ -66,7 +66,7 @@ def drink():
         "著時必喝": "seasonal",
         "鮮搾果汁(無咖啡因)": "fruitjuice",
         "冰釀銀耳": "sweet",
-        "果茶系列": "",  
+        "果茶系列": "TABLE_PRICE_LINK",  # 💡 關鍵改動：將原本空的目錄指向中部完整價目表表格
         "許慶良鮮乳": "milk",
         "茶奶": "teamilk",
         "特調": "special",
@@ -96,14 +96,17 @@ def drink():
     store_count = 0
 
     # ==================================================
-    # 第一階段：線上爬取 8 大飲品分類
+    # 第一階段：線上爬取 8 大飲品分類 (整合完整菜單解鎖)
     # ==================================================
     print("==================================================")
     print("     第一階段：大 苑 子 全 系 列 飲 品 分 類 爬 蟲")
     print("==================================================")
 
     for category_name, url_suffix in MENU_CATEGORIES.items():
-        if url_suffix:
+        # 判斷如果是果茶系列，就自動切換去抓包含完整常駐品項的中部價目表網址
+        if url_suffix == "TABLE_PRICE_LINK":
+            url = "https://www.dayungs.com/item_list_2-html/"
+        elif url_suffix:
             url = f"https://www.dayungs.com/home/product/{url_suffix}/"
         else:
             url = "https://www.dayungs.com/home/product/"
@@ -116,26 +119,49 @@ def drink():
             
             if response.status_code == 200:
                 sp = BeautifulSoup(response.text, "html.parser")
-                heading_tags = sp.select("h2.elementor-heading-title")
-                
                 seen_in_category = set()
+                print("-" * 50)
+
+                # 💡 如果是爬取價目表網址，改用 table 結構解析，把隱藏的 40 幾款果茶全部洗出來！
+                if url_suffix == "TABLE_PRICE_LINK":
+                    rows = sp.select("table tbody tr")
+                    for row in rows:
+                        cells = row.find_all("td")
+                        if cells:
+                            drink_name = cells[0].text.strip()
+                            if drink_name and "品名" not in drink_name and drink_name not in seen_in_category:
+                                seen_in_category.add(drink_name)
+                                
+                                product_doc = {
+                                    "drink_name": drink_name,
+                                    "category": category_name,
+                                    "updated_at": firestore.SERVER_TIMESTAMP
+                                }
+                                db.collection("dayungs_products").document(drink_name).set(product_doc)
+                                print(f"  {idx:02d}. 🥤 {drink_name} (自價目表解鎖儲存)")
+                                idx += 1
                 
-                for tag in heading_tags:
-                    drink_name = tag.text.strip()
-                    if drink_name and drink_name not in NOISE_WORDS and drink_name not in seen_in_category:
-                        seen_in_category.add(drink_name)
-                        
-                        # 打包資料
-                        product_doc = {
-                            "drink_name": drink_name,
-                            "category": category_name,
-                            "updated_at": firestore.SERVER_TIMESTAMP
-                        }
-                        
-                        # 以飲品名稱作為文件ID寫入資料庫
-                        db.collection("dayungs_products").document(drink_name).set(product_doc)
-                        drink_count += 1
-                        
+                # 其他正常的圖卡分類頁面，維持原本的 h2 解析邏輯
+                else:
+                    heading_tags = sp.select("h2.elementor-heading-title")
+                    idx = 1
+                    for tag in heading_tags:
+                        drink_name = tag.text.strip()
+                        if drink_name and drink_name not in NOISE_WORDS and drink_name not in seen_in_category:
+                            seen_in_category.add(drink_name)
+                            
+                            product_doc = {
+                                "drink_name": drink_name,
+                                "category": category_name,
+                                "updated_at": firestore.SERVER_TIMESTAMP
+                            }
+                            db.collection("dayungs_products").document(drink_name).set(product_doc)
+                            print(f"  {idx:02d}. 🥤 {drink_name}")
+                            idx += 1
+                            
+                drink_count += len(seen_in_category)
+                print("-" * 50 + "\n")
+                
             else:
                 print(f"  ❌ 連線失敗，狀態碼：{response.status_code}")
         except Exception as e:
@@ -161,7 +187,11 @@ def drink():
                 rows = sp.select("table tbody tr")
                 
                 seen_stores = set()
+                print("-" * 50)
+                print(f"📍 【{region}地區門市】")
+                print("-" * 50)
                 
+                idx = 1
                 for row in rows:
                     cells = row.find_all("td")
                     if cells:
@@ -172,7 +202,7 @@ def drink():
                             
                             address = cells[3].text.strip() if len(cells) > 3 else "未標明地址"
                             
-                            # 打包資料
+                            # 打包門市資料
                             store_doc = {
                                 "store_name": store_name,
                                 "region": region,
@@ -182,16 +212,24 @@ def drink():
                             
                             # 以分店店名作為文件ID寫入資料庫
                             db.collection("dayungs_stores").document(store_name).set(store_doc)
+                            print(f"  {idx:02d}. 🏪 {store_name:<15} 📍 地址: {address}")
                             store_count += 1
+                            idx += 1
                             
+                if idx == 1:
+                    print("  (該地區網頁內的表格無有效門市資料展示)")
+                print("-" * 50 + "\n")
+                
             else:
                 print(f"  ❌ 地區網頁回應失敗，狀態碼：{response.status_code}")
                 
         except requests.exceptions.ConnectionError:
             print(f"  ⚠️ 警告：{region}地區網址發動反爬蟲阻擋 (ConnectionRefused)，系統自動跳過此區。")
+            print("-" * 50 + "\n")
             
         except Exception as e:
             print(f"  ❌ 擷取該門市資料時發生預期外錯誤: {e}")
+            print("-" * 50 + "\n")
             
         time.sleep(1.5)
 
