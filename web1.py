@@ -10,6 +10,7 @@ from google import genai
 from google.genai import types
 
 
+
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
     # 本地環境：讀取檔案
@@ -99,7 +100,7 @@ def webhook():
         )
 
         response = client.models.generate_content(
-            model='gemini-2.5-flash', # 註：目前官方正式版為 2.5，若您有特殊管道使用 3.5 請保持原樣
+            model='gemini-3.1-flash-lite', # 註：目前官方正式版為 2.5，若您有特殊管道使用 3.5 請保持原樣
             contents=req["queryResult"]["queryText"],
             config=ai_config
         )
