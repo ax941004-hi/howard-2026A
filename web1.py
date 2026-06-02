@@ -59,9 +59,11 @@ def index():
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
+import json
+
 @app.route("/drink")
 def drink():
-    # 💡 1. 飲品分類：移除會觸發阻擋的價目表及果茶，保留純安全、可線上即時同步的 7 大圖卡分類
+    # 保持你最安全的 7 大分類線上網址，完全不碰價目表和門市
     MENU_CATEGORIES = {
         "著時必喝": "seasonal",
         "鮮搾果汁(無咖啡因)": "fruitjuice",
@@ -76,21 +78,16 @@ def drink():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    # 用來排除網頁導覽列上的系統字眼雜訊
-    NOISE_WORDS = ["美味飲品", "著時必喝", "最新消息", "全部消息", "成為我的好朋友", 
-                   "關於大苑子", "實現苑望", "聯絡我們", "大苑子APP", "主選單", "訂閱"]
-
-    # 宣告資料庫 client（放外面效能最好）
     db = firestore.client()
     drink_count = 0
 
     print("==================================================")
-    print("     大 苑 子 全 線 上 安 全 版 飲 品 爬 蟲")
+    print("     大 苑 子 隱 藏 Schema JSON 數據 深度 挖 掘")
     print("==================================================")
 
     for category_name, url_suffix in MENU_CATEGORIES.items():
         url = f"https://www.dayungs.com/home/product/{url_suffix}/"
-        print(f"🚀 正在即時同步 【{category_name}】 的飲品資料...")
+        print(f"🚀 正在深度挖掘 【{category_name}】 隱藏的飲品資料...")
         
         try:
             response = requests.get(url, headers=headers, verify=False, timeout=10)
@@ -98,43 +95,61 @@ def drink():
             
             if response.status_code == 200:
                 sp = BeautifulSoup(response.text, "html.parser")
-                heading_tags = sp.select("h2.elementor-heading-title")
-                
-                idx = 1
                 seen_in_category = set()
                 print("-" * 50)
                 
-                for tag in heading_tags:
-                    drink_name = tag.text.strip()
-                    
-                    # 過濾雜訊與該分類重複的品項
-                    if drink_name and drink_name not in NOISE_WORDS and drink_name not in seen_in_category:
-                        seen_in_category.add(drink_name)
+                # 🎯 核心黑科技：不抓 h2，直接抓網頁骨架裡的 SEO JSON-LD 腳本區塊！
+                json_tags = sp.find_all("script", type="application/ld+json")
+                
+                for tag in json_tags:
+                    try:
+                        # 解析 JSON 內容
+                        json_data = json.loads(tag.string)
+                        graph = json_data.get("@graph", [])
                         
-                        # 打包資料存入 Firestore (以品名為 Document ID 防止重複建立)
-                        product_doc = {
-                            "drink_name": drink_name,
-                            "category": category_name,
-                            "updated_at": firestore.SERVER_TIMESTAMP
-                        }
-                        db.collection("dayungs_products").document(drink_name).set(product_doc)
-                        print(f"  {idx:02d}. 💾 [儲存成功] 🥤 {drink_name}")
-                        idx += 1
+                        for item in graph:
+                            # 尋找 Article 結構中的關鍵字描述（這裡面藏有完整的秘密菜單清單！）
+                            if item.get("@type") == "Article" and "description" in item:
+                                desc_text = item["description"]
+                                
+                                # 大苑子的後台會用「、」或「，」把該分類所有飲料切開
+                                # 例如: "水果茶、莓好時光、美好時光、、草莓鮮乳、草莓牛奶"
+                                raw_drinks = desc_text.replace("、", ",").replace("，", ",").split(",")
+                                
+                                for raw_name in raw_drinks:
+                                    drink_name = raw_name.strip()
+                                    
+                                    # 過濾掉廢字與重複字
+                                    if drink_name and len(drink_name) > 1 and drink_name not in seen_in_category:
+                                        # 排除簡介文字的雜訊
+                                        if "因應" not in drink_name and "採用" not in drink_name and "保證" not in drink_name:
+                                            seen_in_category.add(drink_name)
+                                            
+                                            # 包裝並塞進 Firestore
+                                            product_doc = {
+                                                "drink_name": drink_name,
+                                                "category": category_name,
+                                                "updated_at": firestore.SERVER_TIMESTAMP
+                                            }
+                                            db.collection("dayungs_products").document(drink_name).set(product_doc)
+                                            print(f"  {len(seen_in_category):02d}. 💾 [JSON隱藏解鎖] 🥤 {drink_name}")
+                    except Exception:
+                        continue # 如果某個 JSON 格式不對就跳過，確保不當機
                         
                 drink_count += len(seen_in_category)
+                if len(seen_in_category) == 0:
+                    print("  (此分類官方未在後台埋入隱藏 SEO 資料)")
                 print("-" * 50 + "\n")
             else:
                 print(f"  ❌ 連線失敗，狀態碼：{response.status_code}\n")
                 
         except Exception as e:
-            print(f"  ❌ 爬取 【{category_name}】 時發生錯誤: {e}\n")
+            print(f"  ❌ 執行深度挖掘時發生錯誤: {e}\n")
             
-        # 良好爬蟲習慣：微休 1 秒
         time.sleep(1)
 
-    print("🎉 大苑子線上安全版飲品資料同步完畢！")
-    return f"同步成功！已即時更新 {drink_count} 款當季常駐飲品至 Firestore 資料庫。"
-
+    print("🎉 大苑子隱藏全品項同步完畢！")
+    return f"無敵成功！這次透過繞道破譯，順利撈出網頁上隱藏的 {drink_count} 款核心飲品並存入 Firestore！"
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
