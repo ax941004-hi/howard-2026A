@@ -66,7 +66,7 @@ def drink():
         "著時必喝": "seasonal",
         "鮮搾果汁(無咖啡因)": "fruitjuice",
         "冰釀銀耳": "sweet",
-        "果茶系列": "TABLE_PRICE_LINK",  # 💡 關鍵改動：將原本空的目錄指向中部完整價目表表格
+        "果茶系列": "TABLE_PRICE_LINK",  # 💡 指向中部完整價目表表格，解鎖大長青果茶
         "許慶良鮮乳": "milk",
         "茶奶": "teamilk",
         "特調": "special",
@@ -88,7 +88,7 @@ def drink():
     NOISE_WORDS = ["美味飲品", "著時必喝", "最新消息", "全部消息", "成為我的好朋友", 
                    "關於大苑子", "實現苑望", "聯絡我們", "大苑子APP", "主選單", "訂閱"]
 
-    # 宣告資料庫 client (放外面效能最好)
+    # 宣告資料庫 client
     db = firestore.client()
     
     # 統計用變數
@@ -96,14 +96,13 @@ def drink():
     store_count = 0
 
     # ==================================================
-    # 第一階段：線上爬取 8 大飲品分類 (整合完整菜單解鎖)
+    # 第一階段：線上爬取 8 大飲品分類 (修正 idx 作用域 Bug)
     # ==================================================
     print("==================================================")
     print("     第一階段：大 苑 子 全 系 列 飲 品 分 類 爬 蟲")
     print("==================================================")
 
     for category_name, url_suffix in MENU_CATEGORIES.items():
-        # 判斷如果是果茶系列，就自動切換去抓包含完整常駐品項的中部價目表網址
         if url_suffix == "TABLE_PRICE_LINK":
             url = "https://www.dayungs.com/item_list_2-html/"
         elif url_suffix:
@@ -120,9 +119,12 @@ def drink():
             if response.status_code == 200:
                 sp = BeautifulSoup(response.text, "html.parser")
                 seen_in_category = set()
+                
+                # ⭐️ 核心修正：將 idx 初始化放在進入條件判斷之前，確保兩邊都能正常存取
+                idx = 1
                 print("-" * 50)
 
-                # 💡 如果是爬取價目表網址，改用 table 結構解析，把隱藏的 40 幾款果茶全部洗出來！
+                # 如果是果茶系列（價目表連結）
                 if url_suffix == "TABLE_PRICE_LINK":
                     rows = sp.select("table tbody tr")
                     for row in rows:
@@ -138,13 +140,12 @@ def drink():
                                     "updated_at": firestore.SERVER_TIMESTAMP
                                 }
                                 db.collection("dayungs_products").document(drink_name).set(product_doc)
-                                print(f"  {idx:02d}. 🥤 {drink_name} (自價目表解鎖儲存)")
+                                print(f"  {idx:02d}. 💾 [價目表解鎖] 🥤 {drink_name}")
                                 idx += 1
                 
-                # 其他正常的圖卡分類頁面，維持原本的 h2 解析邏輯
+                # 其他正常的圖卡分類頁面
                 else:
                     heading_tags = sp.select("h2.elementor-heading-title")
-                    idx = 1
                     for tag in heading_tags:
                         drink_name = tag.text.strip()
                         if drink_name and drink_name not in NOISE_WORDS and drink_name not in seen_in_category:
@@ -156,7 +157,7 @@ def drink():
                                 "updated_at": firestore.SERVER_TIMESTAMP
                             }
                             db.collection("dayungs_products").document(drink_name).set(product_doc)
-                            print(f"  {idx:02d}. 🥤 {drink_name}")
+                            print(f"  {idx:02d}. 💾 [儲存成功] 🥤 {drink_name}")
                             idx += 1
                             
                 drink_count += len(seen_in_category)
@@ -165,7 +166,8 @@ def drink():
             else:
                 print(f"  ❌ 連線失敗，狀態碼：{response.status_code}")
         except Exception as e:
-            print(f"  ❌ 爬取飲品時發生錯誤: {e}")
+            # 💡 原本因為 NameError 會在第四個分類卡死，現在修正後就不會跳到這裡了！
+            print(f"  ❌ 爬取 【{category_name}】 飲品時發生錯誤: {e}")
         time.sleep(1)
 
     # ==================================================
@@ -199,10 +201,8 @@ def drink():
                         
                         if store_name and "店名" not in store_name and store_name not in seen_stores:
                             seen_stores.add(store_name)
-                            
                             address = cells[3].text.strip() if len(cells) > 3 else "未標明地址"
                             
-                            # 打包門市資料
                             store_doc = {
                                 "store_name": store_name,
                                 "region": region,
@@ -210,9 +210,8 @@ def drink():
                                 "updated_at": firestore.SERVER_TIMESTAMP
                             }
                             
-                            # 以分店店名作為文件ID寫入資料庫
                             db.collection("dayungs_stores").document(store_name).set(store_doc)
-                            print(f"  {idx:02d}. 🏪 {store_name:<15} 📍 地址: {address}")
+                            print(f"  {idx:02d}. 💾 [儲存成功] 🏪 {store_name:<15} 📍 地址: {address}")
                             store_count += 1
                             idx += 1
                             
@@ -234,8 +233,6 @@ def drink():
         time.sleep(1.5)
 
     print("\n🎉 大苑子線上飲品分類與全台各地區精準門市資料同步完畢！")
-    
-    # 網頁回傳最終訊息
     return f"大苑子同步完畢！共成功存入 {drink_count} 款飲品、{store_count} 間地區門市至 Firestore。"
 
 @app.route("/webhook", methods=["POST"])
