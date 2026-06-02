@@ -55,13 +55,87 @@ def index():
     link += "<a href=/ask>ask</a><hr>"
     link += "<a href=/message>message</a><hr>"
     link += "<a href=/drink>drink</a><hr>"
+    link += "<a href=/drink2>drink2</a><hr>"
 
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
 import json
+@app.route("/drink2")
+def drink2():
+    # 宣告 Firestore 資料庫 client
+    db = firestore.client()
+    drink_count = 0
 
-@app.route("/drink")
+    # 1. 飲品 8 大分類與對照後綴
+    MENU_CATEGORIES = {
+        "著時必喝": "seasonal",
+        "鮮搾果汁(無咖啡因)": "fruitjuice",
+        "冰釀銀耳": "sweet",
+        "果茶系列": "",  # 官網預設的 product 目錄
+        "許慶良鮮乳": "milk",
+        "茶奶": "teamilk",
+        "特調": "special",
+        "品牌聯名": "red-bull"
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    NOISE_WORDS = ["美味飲品", "著時必喝", "最新消息", "全部消息", "成為我的好朋友", 
+                   "關於大苑子", "實現苑望", "聯絡我們", "大苑子APP", "主選單", "訂閱"]
+
+    print("==================================================")
+    print("     動作 /drink2：大 苑 子 全 系 列 飲 品 匯 入")
+    print("==================================================")
+
+    # 2. 開迴圈依序爬取並匯入資料庫
+    for category_name, url_suffix in MENU_CATEGORIES.items():
+        if url_suffix:
+            url = f"https://www.dayungs.com/home/product/{url_suffix}/"
+        else:
+            url = "https://www.dayungs.com/home/product/"
+            
+        print(f"🚀 正在即時同步 【{category_name}】 的飲品資料...")
+        
+        try:
+            response = requests.get(url, headers=headers, verify=False, timeout=10)
+            response.encoding = "utf-8"
+            
+            if response.status_code == 200:
+                sp = BeautifulSoup(response.text, "html.parser")
+                heading_tags = sp.select("h2.elementor-heading-title")
+                
+                seen_in_category = set()
+                
+                for tag in heading_tags:
+                    drink_name = tag.text.strip()
+                    
+                    # 過濾雜訊與重複品項
+                    if drink_name and drink_name not in NOISE_WORDS and drink_name not in seen_in_category:
+                        seen_in_category.add(drink_name)
+                        
+                        # 💡 匯入功能：打包成 Document 格式
+                        product_doc = {
+                            "drink_name": drink_name,
+                            "category": category_name,
+                            "updated_at": firestore.SERVER_TIMESTAMP
+                        }
+                        
+                        # 寫入指定的 Firestore 集合
+                        db.collection("dayungs_products").document(drink_name).set(product_doc)
+                        drink_count += 1
+                        print(f"  💾 [匯入成功] 🥤 {drink_name}")
+                        
+        except Exception as e:
+            print(f"  ❌ 爬取或匯入時發生錯誤: {e}")
+            
+        # 靈魂微休 1 秒，保持良好爬蟲習慣
+        time.sleep(1)
+
+    print("\n🎉 大苑子全品項即時抓取並匯入完畢！")
+    return f"<h3>🚀 郭澔澄的網站提示：大苑子資料匯入完畢！</h3>共成功爬取並儲存了 <b>{drink_count}</b> 款當季常駐飲品至 Firestore 資料庫。"@app.route("/drink")
 def drink():
     # 宣告資料庫 client
     db = firestore.client()
