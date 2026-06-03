@@ -1,13 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
 
-import time
-import hashlib
-
-import urllib3
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin
-
 import os
 import json
 import firebase_admin
@@ -16,6 +9,10 @@ from flask import Flask, render_template, request, make_response, jsonify
 from google import genai
 from google.genai import types
 
+import sqlite3
+from sqlite3 import Error
+
+import hashlib
 
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
@@ -68,120 +65,142 @@ def index():
 
 import json
 
+收到！那就維持你原本整隻程式的結構（包含你的 print 排版風格與畫框設計），我們只聚焦在 @app.route("/news") 這個函式內部進行修改。
+
+這裡為你單獨重寫 @app.route("/news") 的內容。我幫你加入了 SQLite 資料庫的連線與寫入邏輯，並且在畫框中加上了資料庫的儲存狀態，同時補上 Flask 必備的 return 結尾：
+
+Python
+import sqlite3
+from sqlite3 import Error
+
+
 @app.route("/news", methods=["GET", "POST"])
-def news():
-    # --------------------------------------------------
-    # 🌐 狀況甲：使用【瀏覽器直接打開】 (GET) -> 執行爬蟲，灌滿資料庫
-    # --------------------------------------------------
-    if request.method == "GET":
-        # 💡 終極修正：改用 ETtoday 結構最單純、最不防爬蟲的動態快取/清單頁面
-        target_categories = {
-            "AI科技": "https://www.ettoday.net/news/news-list.php?ch=3c",
-            "3C": "https://www.ettoday.net/news/news-list.php?ch=3c",
-            "財經": "https://www.ettoday.net/news/news-list.php?ch=5",
-            "遊戲": "https://www.ettoday.net/news/news-list.php?ch=game",
-            "旅遊": "https://www.ettoday.net/news/news-list.php?ch=travel",
-            "國際": "https://www.ettoday.net/news/news-list.php?ch=2"
-        }
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-        }
-        
-        import time
-        current_date = time.strftime("%Y-%m-%d")
-        saved_count = 0
-        
-        with requests.Session() as session:
-            session.headers.update(headers)
-            for cat_name, cat_url in target_categories.items():
-                try:
-                    # 給予充足的 4 秒超時，確保 Vercel 順利下載快取網頁
-                    response = session.get(cat_url, timeout=4, verify=False)
-                    response.encoding = 'utf-8'
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    
-                    # 🎯 ETtoday 快取列表頁的標準結構非常乾淨：全部都在 .part_list_2 區塊下的 h3 a
-                    news_links = soup.select('.part_list_2 h3 a, .part_list_2 a, h3 a')
-                    seen_urls = set()
-                    
-                    for link in news_links:
-                        news_title = link.get_text().strip()
-                        news_href = link.get('href', '')
-                        
-                        # 過濾掉雜訊
-                        if not news_title or len(news_title) < 10 or not news_href:
-                            continue
-                        if news_href.startswith('javascript') or "member" in news_href:
-                            continue
-                            
-                        full_news_url = urljoin("https://www.ettoday.net/", news_href)
-                        
-                        if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                            seen_urls.add(full_news_url)
-                            
-                            news_data = {
-                                "title_news": news_title,
-                                "link": full_news_url,
-                                "date": current_date,
-                                "category": cat_name
-                            }
-                            
-                            doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
-                            db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
-                            saved_count += 1
-                            
-                except Exception as e:
-                    print(f"爬取 {cat_name} 失敗: {e}")
+def crawl_and_print_all_news():
+    # 鎖定指定的 6 個分類
+    target_categories = {
+        "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
+        "3C": "https://game.ettoday.net/menu/3c/",
+        "財經": "https://finance.ettoday.net/",
+        "遊戲": "https://game.ettoday.net/",
+        "旅遊": "https://travel.ettoday.net/",
+        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
+    }
+
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    print("\n==================================================")
+    print("🚀  ETtoday 6 大分類最新新聞【完整全量】爬取中...")
+    print("==================================================\n")
+
+    # 【新增】連接資料庫並建立資料表（如果不存在的話）
+    conn = sqlite3.connect('news.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS news (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category TEXT,
+            title TEXT,
+            url TEXT UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+
+    # 用於紀錄最後給前端的統計回應
+    summary = {}
+
+    for cat_name, cat_url in target_categories.items():
+        print(f"■ 正在讀取【{cat_name}】的所有最新消息...")
+
+        try:
+            response = requests.get(
+                cat_url, headers=headers, timeout=10, verify=False)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # 抓取該頁面上所有的標題與連結
+            news_links = soup.select(
+                '.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+
+            seen_urls = set()
+            count = 1
+            db_save_count = 0  # 【新增】統計真正成功新寫入資料庫的數量
+
+            print("┌" + "─" * 60)
+            print(f"│ 分類：{cat_name}")
+            print("├" + "─" * 60)
+
+            for link in news_links:
+                news_title = link.get_text().strip()
+                news_href = link.get('href', '')
+
+                # 過濾不合格的雜訊
+                if not news_title or len(news_title) < 10 or not news_href:
+                    continue
+                if news_href.startswith('javascript'):
                     continue
 
-        return f"<h1>🎉 新聞資料庫更新成功！</h1><p>總共成功寫入了 <b>{saved_count}</b> 筆最新新聞到【即時新聞資料】集合中！請去 Firebase 重新整理看成果吧！</p>"
+                full_news_url = urljoin(cat_url, news_href)
 
-    # --------------------------------------------------
-    # 🤖 狀況乙：【Dialogflow 送出 POST 請求】 -> 正常處理，決不逾時
-    # --------------------------------------------------
-    elif request.method == "POST":
-        req = request.get_json(force=True)
-        action = req.get("queryResult").get("action")
-        info = "抱歉，我聽不懂你在說什麼新聞。"
-        
-        if action == "GetTitleNewsList":
-            title_news_list = db.collection("即時新聞資料").select(["title_news"]).stream()
-            titles = [doc.get("title_news") for doc in title_news_list if doc.get("title_news")]
-            
-            if titles:
-                # 為了避免資料庫內有舊資料，直接反轉拿最新寫入的前 15 則
-                display_titles = list(set(titles))[:15]
-                info = "✨ 以下為最新爬取的即時新聞清單：\n\n" + "\n".join(display_titles)
+                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                    seen_urls.add(full_news_url)
+
+                    # 【新增】將資料塞入資料庫 (使用 INSERT OR IGNORE 避免重複網址報錯)
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO news (category, title, url) VALUES (?, ?, ?)",
+                        (cat_name, news_title, full_news_url)
+                    )
+                    # 如果 rowcount > 0 代表這是一筆「全新」寫入的資料
+                    if cursor.rowcount > 0:
+                        db_save_count += 1
+                        db_status = "🆕 已存資料庫"
+                    else:
+                        db_status = "層 舊資料已存在"
+
+                    # 毫無保留直接印出
+                    print(f"│ [{count}] {news_title}")
+                    print(f"│      連結: {full_news_url}")
+                    print(f"│      狀態: {db_status}")
+                    print(f"│ {'-' * 56}")
+                    count += 1
+
+            # 每一頁爬完就 commit 存檔一次
+            conn.commit()
+
+            if count == 1:
+                print("│ 目前此頁面無即時新聞清單。")
+                summary[cat_name] = "無新聞"
             else:
-                info = "目前資料庫沒有任何新聞，請先手動瀏覽網址：你的網址/news 來觸發爬蟲儲存資料！"
+                print(
+                    f"│ ⚙️ 本次成功列出 {count-1} 則【{cat_name}】新聞，其中新寫入資料庫: {db_save_count} 則")
+                summary[cat_name] = f"列出 {count-1} 則 (新寫入 {db_save_count} 則)"
 
-        elif action == "find_news":
-            parameters = req.get("queryResult").get("parameters")
-            title_news = parameters.get("title_news")
-            
-            docs = db.collection("即時新聞資料")\
-                     .where("title_news", ">=", title_news)\
-                     .where("title_news", "<=", title_news + "\uf8ff").stream()
-                     
-            response_list = []
-            for doc in docs:
-                course_data = doc.to_dict()
-                result_list = [
-                    f"標題：{course_data.get('title_news', '')}",
-                    f"新聞連結：{course_data.get('link', '')}",
-                    f"日期：{course_data.get('date', '')}\n"
-                ]
-                response_list.append(f"Keywords: {title_news}\n" + "\n".join(result_list))
-                
-            if response_list:
-                info = "\n".join(response_list)
-            else:
-                info = f"找不到有關【{title_news}】的新聞資訊。"
+            print("└" + "─" * 60 + "\n")
 
-        return make_response(jsonify({"fulfillmentText": info}))
+            # 禮貌歇息 0.5 秒
+            time.sleep(0.5)
+
+        except Exception as e:
+            print(f"│ ❌ 抓取失敗，原因: {e}")
+            print("└" + "─" * 60 + "\n")
+            summary[cat_name] = f"失敗: {e}"
+
+    # 關閉資料庫連線
+    conn.close()
+
+    print("==================================================")
+    print("🎉  所有分類的全部新聞已完整輸出並同步寫入資料庫！")
+    print("==================================================")
+
+    # 【新增】Flask 必須 return 內容，否則瀏覽器訪問時會噴 500 錯誤
+    return {
+        "status": "success",
+        "message": "Crawl and Database Sync Completed",
+        "result": summary
+    }
+@app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
     action = req.get("queryResult").get("action")
