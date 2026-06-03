@@ -9,7 +9,7 @@ from flask import Flask, render_template, request, make_response, jsonify
 from google import genai
 from google.genai import types
 
-
+import hashlib
 
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
@@ -65,11 +65,10 @@ import json
 @app.news("/news", methods=["POST"]) # 依據你原本寫的裝飾器
 def fetch_and_save_news():
     """
-    專為 Vercel Serverless 環境優化的超高速爬蟲
+    專為 Vercel Serverless 環境優化的超高速爬蟲（已整合 Firebase 自動去重新聞寫入）
     """
-    # 優化網址：將 AI 科技換成具體的子頻道，避免走搜尋引擎導致逾時
     target_categories = {
-        "AI科技": "https://www.ettoday.net/news/focus/3C%E3%20%B3%E6%8A%80/AI/",
+        "AI科技": "https://game.ettoday.net/menu/3c/",  # 改採 3C/AI 穩定版面避免搜尋卡死
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
         "遊戲": "https://game.ettoday.net/",
@@ -82,6 +81,7 @@ def fetch_and_save_news():
     }
     
     all_extracted_news = []
+    saved_count = 0
     
     # 使用 Session 保持連線，速度會比單純用 requests 快上數倍
     with requests.Session() as session:
@@ -90,7 +90,7 @@ def fetch_and_save_news():
         for cat_name, cat_url in target_categories.items():
             try:
                 # verify=False 繞過憑證，timeout 設短一點防止卡死
-                response = session.get(cat_url, timeout=3, verify=False)
+                response = session.get(cat_url, timeout=2, verify=False)
                 response.encoding = 'utf-8'
                 soup = BeautifulSoup(response.text, 'html.parser')
                 
@@ -115,27 +115,33 @@ def fetch_and_save_news():
                         news_data = {
                             "category": cat_name,
                             "title": news_title,
-                            "url": full_news_url
+                            "url": full_news_url,
+                            "fetched_at": firestore.SERVER_TIMESTAMP # 讓 Firebase 自動帶入當前伺服器時間
                         }
                         all_extracted_news.append(news_data)
                         
                         # --------------------------------------------------
-                        # 🔥 這裡放你的 Firebase / 資料庫寫入程式碼
-                        # 範例 (Firestore):
-                        # db.collection("news").document(full_news_url.replace("/", "_")).set(news_data)
+                        # 🔥 這裡已幫你實作好 Firebase / 資料庫寫入程式碼
+                        # 將網址轉成 MD5 當作文件 ID，避免網址中的斜線 "/" 搞亂 Firestore 的層級
                         # --------------------------------------------------
+                        doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
+                        
+                        # 使用 merge=True，如果新聞已存在就不動，不存在就新建
+                        db.collection("news").document(doc_id).set(news_data, merge=True)
+                        saved_count += 1
                         
             except Exception as e:
                 # 單一分類出錯不中斷，繼續往下跑
                 print(f"Error crawling {cat_name}: {e}")
                 continue
 
-    # Vercel Function 必須要有 return 回傳 JSON 格式
-    return {
+    # 💡 關鍵修正：Vercel 的 Flask 必須回傳被 jsonify 包裹過後的 Response 對象
+    return jsonify({
         "status": "success",
         "total_crawled": len(all_extracted_news),
+        "total_saved_to_firebase": saved_count,
         "data": all_extracted_news
-    }
+    })
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
