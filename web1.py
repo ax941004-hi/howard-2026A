@@ -75,8 +75,8 @@ def news():
         parameters = req.get("queryResult").get("parameters")
         title_news = parameters.get("title_news")
         
-        # 查詢對應你圖片中的「科技新聞資料」Collection
-        docs = db.collection("科技新聞資料")\
+        # 查詢更名後的「即時新聞資料」Collection
+        docs = db.collection("即時新聞資料")\
                  .where("title_news", ">=", title_news)\
                  .where("title_news", "<=", title_news + "\uf8ff").stream()
                  
@@ -84,7 +84,8 @@ def news():
         for doc in docs:
             course_data = doc.to_dict()
             result_list = []
-            # 對齊你圖片中的欄位名稱：title_news, link, date
+            
+            # 欄位維持不變，對齊你的 Firebase 欄位
             result_list.append(f"標題：{course_data.get('title_news', '')}")
             result_list.append(f"新聞連結：{course_data.get('link', '')}")
             result_list.append(f"日期：{course_data.get('date', '')}")
@@ -101,7 +102,7 @@ def news():
             })
         else:
             return jsonify({
-                "fulfillmentText": f"找不到有關【{title_news}】的資訊。",
+                "fulfillmentText": f"找不到有關【{title_news}】的新聞資訊。",
                 "source": "news"
             })
 
@@ -109,7 +110,7 @@ def news():
     # 🚀 功能二：GetTitleNewsList (先即時爬取，再回傳總清單)
     # --------------------------------------------------
     elif action == "GetTitleNewsList":
-        # 1. 這裡直接融入優化後的超高速 6 大分類爬蟲
+        # 1. 6 大精選分類爬蟲
         target_categories = {
             "AI科技": "https://game.ettoday.net/menu/3c/",
             "3C": "https://game.ettoday.net/menu/3c/",
@@ -125,13 +126,13 @@ def news():
         
         # 執行即時爬取與更新資料庫
         import time
-        current_date = time.strftime("%Y-%m-%d") # 產生符合你格式的日期字串
+        current_date = time.strftime("%Y-%m-%d")
         
         with requests.Session() as session:
             session.headers.update(headers)
             for cat_name, cat_url in target_categories.items():
                 try:
-                    response = session.get(cat_url, timeout=1.5, verify=False) # 縮短至 1.5 秒確保 Dialogflow 不逾時
+                    response = session.get(cat_url, timeout=1.5, verify=False)
                     response.encoding = 'utf-8'
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
@@ -152,7 +153,6 @@ def news():
                         if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
                             seen_urls.add(full_news_url)
                             
-                            # 🎯 重點：完全對齊你的資料庫欄位格式
                             news_data = {
                                 "title_news": news_title,
                                 "link": full_news_url,
@@ -160,22 +160,22 @@ def news():
                                 "category": cat_name
                             }
                             
-                            # 透過網址的 MD5 當作 Document ID 防止重複寫入
+                            # 寫入更名後的「即時新聞資料」Collection
                             doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
-                            db.collection("科技新聞資料").document(doc_id).set(news_data, merge=True)
+                            db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
                             
                 except Exception as crawl_e:
                     print(f"即時爬取 {cat_name} 失敗，跳過。原因: {crawl_e}")
                     continue
 
-        # 2. 爬取並存檔完成後，接著執行你原本讀取資料庫的邏輯
-        title_news_list = db.collection("科技新聞資料").select(["title_news"]).stream()
+        # 2. 從「即時新聞資料」Collection 倒出最新清單
+        title_news_list = db.collection("即時新聞資料").select(["title_news"]).stream()
         titles = [doc.get("title_news") for doc in title_news_list if doc.get("title_news")]
         
-        # 限制顯示最新的 15 則，避免文字量過大導致 Dialogflow 拋出格式錯誤
+        # 限制顯示最新的 15 則，避免文字量過大
         display_titles = titles[:15] if titles else ["目前資料庫沒有任何新聞。"]
         
-        # 3. 組裝 Dialogflow 認得的 fulfillmentMessages 回傳格式
+        # 3. 組裝 Dialogflow 回傳格式（修正回覆文字）
         response = {
             "fulfillmentMessages": [
                 {
