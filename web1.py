@@ -80,21 +80,14 @@ def webhook2():
         req = request.get_json(silent=True, force=True)
         query_text = req.get("queryResult", {}).get("queryText", "")
         
-        # 預設想要查詢的分類（剩 5 個分類）
         target_cat = "AI科技" 
         query_lower = query_text.lower()
         
-        # 多重關鍵字模糊比對（移除了遊戲分類）
-        if "3c" in query_lower:
-            target_cat = "3C"
-        elif "財經" in query_lower or "金融" in query_lower:
-            target_cat = "財經"
-        elif "旅遊" in query_lower or "玩" in query_lower:
-            target_cat = "旅遊"
-        elif "國際" in query_lower or "國外" in query_lower:
-            target_cat = "國際"
-        elif "ai" in query_lower or "科技" in query_lower:
-            target_cat = "AI科技"
+        if "3c" in query_lower: target_cat = "3C"
+        elif "財經" in query_lower or "金融" in query_lower: target_cat = "財經"
+        elif "旅遊" in query_lower or "玩" in query_lower: target_cat = "旅遊"
+        elif "國際" in query_lower or "國外" in query_lower: target_cat = "國際"
+        elif "ai" in query_lower or "科技" in query_lower: target_cat = "AI科技"
         else:
             for cat in ["3C", "財經", "旅遊", "國際", "AI科技"]:
                 if cat in query_text:
@@ -105,14 +98,11 @@ def webhook2():
         
         if db:
             try:
-                # 【極速優化】直接定點讀取快取文檔（耗時只需 0.1 秒，絕對不會超時重複發送）
+                # 直接定點讀取快取文檔（耗時只需 0.1 秒，絕對不重複發送）
                 cache_ref = db.collection("latest_cache").document(target_cat)
                 cache_doc = cache_ref.get()
-                
                 if cache_doc.exists:
-                    cache_data = cache_doc.to_dict()
-                    # 直接提取爬蟲端已經打包好的 5 則最新新聞
-                    news_list = cache_data.get("news", [])
+                    news_list = cache_doc.to_dict().get("news", [])
             except Exception as e:
                 print(f"極速讀取快取失敗: {e}")
 
@@ -126,15 +116,14 @@ def webhook2():
         })
 
     # ==========================================================
-    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 爬蟲並順便打包「前 5 則快取」
+    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 毫無限制、極速塞滿大倉庫並更新快取
     # ==========================================================
-    # 目標網頁精簡為 5 個分類
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
         "旅遊": "https://travel.ettoday.net/",
-        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
+        "國際": "https://www.ettoday.net/news_focus/%E5%9C%8B%E9%9A%9B/"
     }
     
     headers = {
@@ -148,15 +137,11 @@ def webhook2():
             response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # 使用全網大通用的新聞連結選擇器
             news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
             
             seen_urls = set()
             count = 1
             db_save_count = 0
-            
-            # 用來幫這個分類即時打包最新 5 則的臨時陣列
             cat_cache_list = []
             
             for link in news_links:
@@ -169,7 +154,6 @@ def webhook2():
                 if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
                     seen_urls.add(full_news_url)
                     
-                    # 收集最新的前 5 則文字（因為網頁本來就是由新到舊，直接拿前 5 個就是最新的）
                     if len(cat_cache_list) < 5:
                         cat_cache_list.append(f"【{cat_name}】{news_title}\n🔗 {full_news_url}")
                     
@@ -178,31 +162,30 @@ def webhook2():
                         doc_id_hash = hashlib.md5(doc_id).hexdigest()
                         doc_ref = db.collection("news").document(doc_id_hash)
                         
-                        if not doc_ref.get().exists:
-                            doc_ref.set({
-                                "category": cat_name,
-                                "title": news_title,
-                                "url": full_news_url,
-                                "created_at": datetime.utcnow()
-                            })
-                            db_save_count += 1
+                        # 【核心修正】拿掉超慢的 .get().exists 檢查，直接盲塞 set() 覆蓋，速度直接起飛！
+                        doc_ref.set({
+                            "category": cat_name,
+                            "title": news_title,
+                            "url": full_news_url,
+                            "created_at": datetime.utcnow()
+                        })
+                        db_save_count += 1
                     count += 1
             
-            # 【核心優化】爬完此分類後，直接把熱騰騰的 5 則懶人包寫入獨立的快取 Document 存起來！
             if db and cat_cache_list:
                 db.collection("latest_cache").document(cat_name).set({
                     "news": cat_cache_list,
                     "updated_at": datetime.utcnow()
                 })
             
-            summary[cat_name] = f"列出 {count-1} 則 (新寫入 {db_save_count} 則，快取已更新)"
-            time.sleep(0.5)
+            summary[cat_name] = f"成功處理 {count-1} 則新聞並同步快取"
+            time.sleep(0.3)
         except Exception as e:
             summary[cat_name] = f"失敗: {e}"
 
     return jsonify({
         "status": "success",
-        "message": "精簡版 5 大新聞爬取、同步 Firebase 並寫入快取完成！",
+        "message": "大倉庫塞滿、快取包更新完成！",
         "result": summary
     })
 @app.route("/webhook", methods=["POST"])
