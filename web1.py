@@ -87,6 +87,7 @@ def news():
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
         
+        import time
         current_date = time.strftime("%Y-%m-%d")
         saved_count = 0
         
@@ -98,35 +99,55 @@ def news():
                     response.encoding = 'utf-8'
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
-                    news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+                    # 💡 關鍵修正：放寬抓取規則，掃描所有 a 標籤並向上回溯判定
+                    news_links = soup.find_all('a')
                     seen_urls = set()
                     
                     for link in news_links:
                         news_title = link.get_text().strip()
                         news_href = link.get('href', '')
                         
-                        if not news_title or len(news_title) < 10 or not news_href:
+                        # 判定這個連結是否被包在 h1 ~ h4 等標題標籤或標題類別（class）內
+                        is_headline = False
+                        parent = link.parent
+                        for _ in range(2):  # 向上找兩層
+                            if parent:
+                                parent_name = parent.name
+                                parent_class = str(parent.get('class', '')).lower()
+                                if parent_name in ['h1', 'h2', 'h3', 'h4'] or 'title' in parent_class or 'pic_intro' in parent_class:
+                                    is_headline = True
+                                    break
+                                parent = parent.parent
+                        
+                        # 如果不符合標題結構，就不當成新聞抓取
+                        if not is_headline:
+                            continue
+                            
+                        # 過濾掉字數過短的雜訊（如導覽按鈕）
+                        if not news_title or len(news_title) < 8 or not news_href:
                             continue
                         if news_href.startswith('javascript'):
                             continue
                             
                         full_news_url = urljoin(cat_url, news_href)
                         
+                        # 確保連結合法（排除純分類頁面、廣告），且不重複抓取
                         if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                            seen_urls.add(full_news_url)
-                            
-                            news_data = {
-                                "title_news": news_title,
-                                "link": full_news_url,
-                                "date": current_date,
-                                "category": cat_name
-                            }
-                            
-                            # 以網址的 MD5 當作 Document ID，存入「即時新聞資料」
-                            doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
-                            db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
-                            saved_count += 1
-                            
+                            if "article" in full_news_url or "news" in full_news_url or "/202" in full_news_url:
+                                seen_urls.add(full_news_url)
+                                
+                                news_data = {
+                                    "title_news": news_title,
+                                    "link": full_news_url,
+                                    "date": current_date,
+                                    "category": cat_name
+                                }
+                                
+                                # 以網址的 MD5 當作 Document ID，存入「即時新聞資料」
+                                doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
+                                db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
+                                saved_count += 1
+                                
                 except Exception as e:
                     print(f"爬取 {cat_name} 失敗: {e}")
                     continue
