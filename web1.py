@@ -74,7 +74,7 @@ import json
 @app.route("/webhook2", methods=["GET", "POST"])
 def webhook2():
     # ==========================================================
-    # 情況 A：LINE / Dialogflow 傳訊息進來 (POST) ➡️ 快速從資料庫拿資料回傳
+    # 情況 A：LINE / Dialogflow 傳訊息進來 (POST) ➡️ 閃電極速調資料（徹底防重複）
     # ==========================================================
     if request.method == "POST":
         req = request.get_json(silent=True, force=True)
@@ -105,46 +105,28 @@ def webhook2():
         
         if db:
             try:
-                # 單純且極速地撈出該分類最新 8 則，完全防止超時重複發送
-                docs = db.collection("news")\
-                         .where("category", "==", target_cat)\
-                         .limit(8)\
-                         .stream()
-                         
-                temp_list = []
-                for doc in docs:
-                    temp_list.append(doc.to_dict())
+                # 【極速優化】直接定點讀取快取文檔（耗時只需 0.1 秒，絕對不會超時重複發送）
+                cache_ref = db.collection("latest_cache").document(target_cat)
+                cache_doc = cache_ref.get()
                 
-                # 在 Python 內部利用 created_at 進行由新到舊的排序
-                try:
-                    temp_list.sort(key=lambda x: x.get('created_at') if x.get('created_at') is not None else datetime.min, reverse=True)
-                except Exception as sort_err:
-                    print(f"排序微調: {sort_err}")
-                
-                # 剔除重複，精選出前 5 則最新新聞
-                seen_titles = set()
-                for data in temp_list:
-                    t_title = data.get('title')
-                    if t_title not in seen_titles:
-                        seen_titles.add(t_title)
-                        news_list.append(f"【{data.get('category')}】{t_title}\n🔗 {data.get('url')}")
-                    if len(news_list) >= 5:
-                        break
-                    
+                if cache_doc.exists:
+                    cache_data = cache_doc.to_dict()
+                    # 直接提取爬蟲端已經打包好的 5 則最新新聞
+                    news_list = cache_data.get("news", [])
             except Exception as e:
-                print(f"從 Firebase 撈取資料失敗: {e}")
+                print(f"極速讀取快取失敗: {e}")
 
         if news_list:
-            reply_message = f"🚀 為您從雲端資料庫調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
+            reply_message = f"🚀 為您調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
         else:
-            reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開網頁發動爬蟲儲存資料！"
+            reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開網頁發動爬蟲更新快取！"
 
         return jsonify({
             "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
         })
 
     # ==========================================================
-    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 毫無時間限制地把新聞塞滿 Firebase
+    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 爬蟲並順便打包「前 5 則快取」
     # ==========================================================
     # 目標網頁精簡為 5 個分類
     target_categories = {
@@ -174,6 +156,9 @@ def webhook2():
             count = 1
             db_save_count = 0
             
+            # 用來幫這個分類即時打包最新 5 則的臨時陣列
+            cat_cache_list = []
+            
             for link in news_links:
                 news_title = link.get_text().strip()
                 news_href = link.get('href', '')
@@ -183,6 +168,10 @@ def webhook2():
                 
                 if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
                     seen_urls.add(full_news_url)
+                    
+                    # 收集最新的前 5 則文字（因為網頁本來就是由新到舊，直接拿前 5 個就是最新的）
+                    if len(cat_cache_list) < 5:
+                        cat_cache_list.append(f"【{cat_name}】{news_title}\n🔗 {full_news_url}")
                     
                     if db:
                         doc_id = json.dumps(full_news_url).encode('utf-8')
@@ -199,14 +188,21 @@ def webhook2():
                             db_save_count += 1
                     count += 1
             
-            summary[cat_name] = f"列出 {count-1} 則 (新寫入 {db_save_count} 則)"
+            # 【核心優化】爬完此分類後，直接把熱騰騰的 5 則懶人包寫入獨立的快取 Document 存起來！
+            if db and cat_cache_list:
+                db.collection("latest_cache").document(cat_name).set({
+                    "news": cat_cache_list,
+                    "updated_at": datetime.utcnow()
+                })
+            
+            summary[cat_name] = f"列出 {count-1} 則 (新寫入 {db_save_count} 則，快取已更新)"
             time.sleep(0.5)
         except Exception as e:
             summary[cat_name] = f"失敗: {e}"
 
     return jsonify({
         "status": "success",
-        "message": "精簡版 5 大新聞爬取並同步 Firebase 完成！",
+        "message": "精簡版 5 大新聞爬取、同步 Firebase 並寫入快取完成！",
         "result": summary
     })
 @app.route("/webhook", methods=["POST"])
