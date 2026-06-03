@@ -63,12 +63,13 @@ def index():
 import json
 
 @app.news("/news", methods=["POST"]) # 依據你原本寫的裝飾器
-async def fetch_and_save_news(db = None): # 如果有 database session 可以當作參數傳入
+def fetch_and_save_news():
     """
-    觸發此 API 時，會自動爬取 6 大分類的所有新聞，並直接寫入資料庫
+    專為 Vercel Serverless 環境優化的超高速爬蟲
     """
+    # 優化網址：將 AI 科技換成具體的子頻道，避免走搜尋引擎導致逾時
     target_categories = {
-        "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
+        "AI科技": "https://www.ettoday.net/news/focus/3C%E3%20%B3%E6%8A%80/AI/",
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
         "遊戲": "https://game.ettoday.net/",
@@ -80,73 +81,60 @@ async def fetch_and_save_news(db = None): # 如果有 database session 可以當
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
-    saved_count = 0
-    error_logs = []
-
-    for cat_name, cat_url in target_categories.items():
-        try:
-            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # 抓取該頁面上所有的標題與連結
-            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-            
-            seen_urls = set()
-            
-            for link in news_links:
-                news_title = link.get_text().strip()
-                news_href = link.get('href', '')
+    all_extracted_news = []
+    
+    # 使用 Session 保持連線，速度會比單純用 requests 快上數倍
+    with requests.Session() as session:
+        session.headers.update(headers)
+        
+        for cat_name, cat_url in target_categories.items():
+            try:
+                # verify=False 繞過憑證，timeout 設短一點防止卡死
+                response = session.get(cat_url, timeout=3, verify=False)
+                response.encoding = 'utf-8'
+                soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # 過濾不合格的雜訊
-                if not news_title or len(news_title) < 10 or not news_href:
-                    continue
-                if news_href.startswith('javascript'):
-                    continue
-                    
-                full_news_url = urljoin(cat_url, news_href)
+                news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+                seen_urls = set()
                 
-                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                    seen_urls.add(full_news_url)
+                for link in news_links:
+                    news_title = link.get_text().strip()
+                    news_href = link.get('href', '')
                     
-                    # ==================================================
-                    # 💡 【這裡開始寫入你的資料庫】 💡
-                    # ==================================================
-                    # 範例 A：如果你是用關係型資料庫 ORM (如 SQLAlchemy)
-                    # news_item = NewsModel(category=cat_name, title=news_title, url=full_news_url)
-                    # db.add(news_item)
+                    if not news_title or len(news_title) < 10 or not news_href:
+                        continue
+                    if news_href.startswith('javascript'):
+                        continue
+                        
+                    full_news_url = urljoin(cat_url, news_href)
                     
-                    # 範例 B：如果你是用 MongoDB (如 PyMongo)
-                    # db.news.update_one({"url": full_news_url}, {"$set": {"category": cat_name, "title": news_title}}, upsert=True)
-                    
-                    # 這裡先用 dictionary 模擬你要存進資料庫的欄位結構
-                    news_data = {
-                        "category": cat_name,
-                        "title": news_title,
-                        "url": full_news_url,
-                        "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-                    }
-                    
-                    # 真正執行寫入資料庫的動作（請替換成你專案的資料庫語法）：
-                    # print(f"正在將新聞存入資料庫: {news_data['title']}") 
-                    
-                    saved_count += 1
-            
-            # 每個分類爬完後稍微歇息，避免頻率太快
-            time.sleep(0.3)
-            
-        except Exception as e:
-            error_logs.append(f"分類【{cat_name}】抓取或存檔失敗: {e}")
+                    if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                        seen_urls.add(full_news_url)
+                        
+                        # 把抓到的資料打包成字典
+                        news_data = {
+                            "category": cat_name,
+                            "title": news_title,
+                            "url": full_news_url
+                        }
+                        all_extracted_news.append(news_data)
+                        
+                        # --------------------------------------------------
+                        # 🔥 這裡放你的 Firebase / 資料庫寫入程式碼
+                        # 範例 (Firestore):
+                        # db.collection("news").document(full_news_url.replace("/", "_")).set(news_data)
+                        # --------------------------------------------------
+                        
+            except Exception as e:
+                # 單一分類出錯不中斷，繼續往下跑
+                print(f"Error crawling {cat_name}: {e}")
+                continue
 
-    # 寫入完畢後，執行 commit 確保資料完全寫進資料庫 (ORM 適用)
-    # if db:
-    #     db.commit()
-
-    # 回傳 API 呼叫結果
+    # Vercel Function 必須要有 return 回傳 JSON 格式
     return {
         "status": "success",
-        "message": f"成功爬取並存入資料庫共 {saved_count} 則新聞！",
-        "errors": error_logs if error_logs else "None"
+        "total_crawled": len(all_extracted_news),
+        "data": all_extracted_news
     }
 @app.route("/webhook", methods=["POST"])
 def webhook():
