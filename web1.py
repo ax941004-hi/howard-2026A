@@ -64,132 +64,83 @@ import json
 
 @app.route("/news", methods=["POST"])
 def news():
-    # 讀取 Dialogflow 傳過來的 JSON 請求
-    req = request.get_json(force=True)
-    action = req.get("queryResult").get("action")
+    # 鎖定指定的 6 個分類
+    target_categories = {
+        "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
+        "3C": "https://game.ettoday.net/menu/3c/",
+        "財經": "https://finance.ettoday.net/",
+        "遊戲": "https://game.ettoday.net/",
+        "旅遊": "https://travel.ettoday.net/",
+        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
+    }
     
-    # --------------------------------------------------
-    # 🔍 功能一：find_news (尋找特定新聞標題)
-    # --------------------------------------------------
-    if action == "find_news":
-        parameters = req.get("queryResult").get("parameters")
-        title_news = parameters.get("title_news")
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    print("\n==================================================")
+    print("🚀  ETtoday 6 大分類最新新聞【完整全量】爬取中...")
+    print("==================================================\n")
+    
+    for cat_name, cat_url in target_categories.items():
+        print(f"■ 正在讀取【{cat_name}】的所有最新消息...")
         
-        # 查詢「即時新聞資料」Collection
-        docs = db.collection("即時新聞資料")\
-                 .where("title_news", ">=", title_news)\
-                 .where("title_news", "<=", title_news + "\uf8ff").stream()
-                 
-        response_list = []
-        for doc in docs:
-            course_data = doc.to_dict()
-            result_list = []
+        try:
+            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
             
-            result_list.append(f"標題：{course_data.get('title_news', '')}")
-            result_list.append(f"新聞連結：{course_data.get('link', '')}")
-            result_list.append(f"日期：{course_data.get('date', '')}")
-            result_list.append("\n")
+            # 抓取該頁面上所有的標題與連結
+            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
             
-            result = "\n".join(result_list)
-            info = f"Keywords: {title_news}\n{result}"
-            response_list.append(info)
+            seen_urls = set()
+            count = 1
             
-        if response_list:
-            return jsonify({
-                "fulfillmentText": "\n".join(response_list),
-                "source": "news"
-            })
-        else:
-            return jsonify({
-                "fulfillmentText": f"找不到有關【{title_news}】的新聞資訊。",
-                "source": "news"
-            })
-
-    # --------------------------------------------------
-    # 🚀 功能二：GetTitleNewsList (先即時爬取，再回傳總清單)
-    # --------------------------------------------------
-    elif action == "GetTitleNewsList":
-        target_categories = {
-            "AI科技": "https://game.ettoday.net/menu/3c/",
-            "3C": "https://game.ettoday.net/menu/3c/",
-            "財經": "https://finance.ettoday.net/",
-            "遊戲": "https://game.ettoday.net/",
-            "旅遊": "https://travel.ettoday.net/",
-            "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
-        }
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        current_date = time.strftime("%Y-%m-%d")
-        
-        # 啟動極速 Session 爬蟲
-        with requests.Session() as session:
-            session.headers.update(headers)
-            for cat_name, cat_url in target_categories.items():
-                try:
-                    response = session.get(cat_url, timeout=1.2, verify=False) # 再縮短一點確保不逾時
-                    response.encoding = 'utf-8'
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    
-                    news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-                    seen_urls = set()
-                    
-                    for link in news_links:
-                        news_title = link.get_text().strip()
-                        news_href = link.get('href', '')
-                        
-                        if not news_title or len(news_title) < 10 or not news_href:
-                            continue
-                        if news_href.startswith('javascript'):
-                            continue
-                            
-                        full_news_url = urljoin(cat_url, news_href)
-                        
-                        if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                            seen_urls.add(full_news_url)
-                            
-                            news_data = {
-                                "title_news": news_title,
-                                "link": full_news_url,
-                                "date": current_date,
-                                "category": cat_name
-                            }
-                            
-                            # 使用網址 MD5 做文件 ID 存進「即時新聞資料」
-                            doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
-                            db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
-                            
-                except Exception as crawl_e:
-                    print(f"即時爬取 {cat_name} 失敗: {crawl_e}")
+            print("┌" + "─" * 60)
+            print(f"│ 分類：{cat_name}")
+            print("├" + "─" * 60)
+            
+            for link in news_links:
+                news_title = link.get_text().strip()
+                news_href = link.get('href', '')
+                
+                # 過濾不合格的雜訊
+                if not news_title or len(news_title) < 10 or not news_href:
                     continue
+                if news_href.startswith('javascript'):
+                    continue
+                    
+                full_news_url = urljoin(cat_url, news_href)
+                
+                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                    seen_urls.add(full_news_url)
+                    
+                    # 毫無保留直接印出
+                    print(f"│ [{count}] {news_title}")
+                    print(f"│     連結: {full_news_url}")
+                    print(f"│ {'-' * 56}")
+                    count += 1
+                    
+            if count == 1:
+                print("│ 目前此頁面無即時新聞清單。")
+            else:
+                print(f"│ ⚙️ 本次成功列出 {count-1} 則【{cat_name}】的全部新聞")
+            
+            print("└" + "─" * 60 + "\n")
+            
+            # 禮貌歇息 0.5 秒
+            time.sleep(0.5)
+            
+        except Exception as e:
+            print(f"│ ❌ 抓取失敗，原因: {e}")
+            print("└" + "─" * 60 + "\n")
 
-        # 從「即時新聞資料」Collection 倒出最新清單
-        title_news_list = db.collection("即時新聞資料").select(["title_news"]).stream()
-        titles = [doc.get("title_news") for doc in title_news_list if doc.get("title_news")]
-        
-        display_titles = titles[:15] if titles else ["目前資料庫沒有任何新聞。"]
-        
-        response = {
-            "fulfillmentMessages": [
-                {
-                    "text": {
-                        "text": [
-                            "✨ 以下為最新爬取的即時新聞清單：\n" + "\n".join(display_titles)
-                        ]
-                    }
-                }
-            ],
-            "source": "news"
-        }
-        return jsonify(response)
-
-    return jsonify({"fulfillmentText": "無效的操作", "source": "news"})
+    print("==================================================")
+    print("🎉  所有分類的全部新聞已完整輸出完畢！")
+    print("==================================================")
 
 if __name__ == "__main__":
-    app.run(debug=True)
-@app.route("/webhook", methods=["POST"])
+    crawl_and_print_all_news()
 def webhook():
     req = request.get_json(force=True)
     action = req.get("queryResult").get("action")
