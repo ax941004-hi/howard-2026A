@@ -74,17 +74,20 @@ def news():
     # 🌐 狀況甲：使用【瀏覽器直接打開】 (GET) -> 執行爬蟲，灌滿資料庫
     # --------------------------------------------------
     if request.method == "GET":
+        # 💡 終極修正：改用 ETtoday 結構最單純、最不防爬蟲的動態快取/清單頁面
         target_categories = {
-            "AI科技": "https://game.ettoday.net/menu/3c/",
-            "3C": "https://game.ettoday.net/menu/3c/",
-            "財經": "https://finance.ettoday.net/",
-            "遊戲": "https://game.ettoday.net/",
-            "旅遊": "https://travel.ettoday.net/",
-            "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
+            "AI科技": "https://www.ettoday.net/news/news-list.php?ch=3c",
+            "3C": "https://www.ettoday.net/news/news-list.php?ch=3c",
+            "財經": "https://www.ettoday.net/news/news-list.php?ch=5",
+            "遊戲": "https://www.ettoday.net/news/news-list.php?ch=game",
+            "旅遊": "https://www.ettoday.net/news/news-list.php?ch=travel",
+            "國際": "https://www.ettoday.net/news/news-list.php?ch=2"
         }
         
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
         }
         
         import time
@@ -95,59 +98,41 @@ def news():
             session.headers.update(headers)
             for cat_name, cat_url in target_categories.items():
                 try:
-                    response = session.get(cat_url, timeout=3, verify=False)
+                    # 給予充足的 4 秒超時，確保 Vercel 順利下載快取網頁
+                    response = session.get(cat_url, timeout=4, verify=False)
                     response.encoding = 'utf-8'
                     soup = BeautifulSoup(response.text, 'html.parser')
                     
-                    # 💡 關鍵修正：放寬抓取規則，掃描所有 a 標籤並向上回溯判定
-                    news_links = soup.find_all('a')
+                    # 🎯 ETtoday 快取列表頁的標準結構非常乾淨：全部都在 .part_list_2 區塊下的 h3 a
+                    news_links = soup.select('.part_list_2 h3 a, .part_list_2 a, h3 a')
                     seen_urls = set()
                     
                     for link in news_links:
                         news_title = link.get_text().strip()
                         news_href = link.get('href', '')
                         
-                        # 判定這個連結是否被包在 h1 ~ h4 等標題標籤或標題類別（class）內
-                        is_headline = False
-                        parent = link.parent
-                        for _ in range(2):  # 向上找兩層
-                            if parent:
-                                parent_name = parent.name
-                                parent_class = str(parent.get('class', '')).lower()
-                                if parent_name in ['h1', 'h2', 'h3', 'h4'] or 'title' in parent_class or 'pic_intro' in parent_class:
-                                    is_headline = True
-                                    break
-                                parent = parent.parent
-                        
-                        # 如果不符合標題結構，就不當成新聞抓取
-                        if not is_headline:
+                        # 過濾掉雜訊
+                        if not news_title or len(news_title) < 10 or not news_href:
+                            continue
+                        if news_href.startswith('javascript') or "member" in news_href:
                             continue
                             
-                        # 過濾掉字數過短的雜訊（如導覽按鈕）
-                        if not news_title or len(news_title) < 8 or not news_href:
-                            continue
-                        if news_href.startswith('javascript'):
-                            continue
-                            
-                        full_news_url = urljoin(cat_url, news_href)
+                        full_news_url = urljoin("https://www.ettoday.net/", news_href)
                         
-                        # 確保連結合法（排除純分類頁面、廣告），且不重複抓取
                         if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                            if "article" in full_news_url or "news" in full_news_url or "/202" in full_news_url:
-                                seen_urls.add(full_news_url)
-                                
-                                news_data = {
-                                    "title_news": news_title,
-                                    "link": full_news_url,
-                                    "date": current_date,
-                                    "category": cat_name
-                                }
-                                
-                                # 以網址的 MD5 當作 Document ID，存入「即時新聞資料」
-                                doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
-                                db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
-                                saved_count += 1
-                                
+                            seen_urls.add(full_news_url)
+                            
+                            news_data = {
+                                "title_news": news_title,
+                                "link": full_news_url,
+                                "date": current_date,
+                                "category": cat_name
+                            }
+                            
+                            doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
+                            db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
+                            saved_count += 1
+                            
                 except Exception as e:
                     print(f"爬取 {cat_name} 失敗: {e}")
                     continue
@@ -155,25 +140,24 @@ def news():
         return f"<h1>🎉 新聞資料庫更新成功！</h1><p>總共成功寫入了 <b>{saved_count}</b> 筆最新新聞到【即時新聞資料】集合中！請去 Firebase 重新整理看成果吧！</p>"
 
     # --------------------------------------------------
-    # 🤖 狀況乙：【Dialogflow 送出 POST 請求】 -> 專心迅速回應，決不逾時
+    # 🤖 狀況乙：【Dialogflow 送出 POST 請求】 -> 正常處理，決不逾時
     # --------------------------------------------------
     elif request.method == "POST":
         req = request.get_json(force=True)
         action = req.get("queryResult").get("action")
         info = "抱歉，我聽不懂你在說什麼新聞。"
         
-        # 功能 (1) 的邏輯：抓出總清單
         if action == "GetTitleNewsList":
             title_news_list = db.collection("即時新聞資料").select(["title_news"]).stream()
             titles = [doc.get("title_news") for doc in title_news_list if doc.get("title_news")]
             
             if titles:
-                display_titles = titles[:15] # 倒出前 15 則
+                # 為了避免資料庫內有舊資料，直接反轉拿最新寫入的前 15 則
+                display_titles = list(set(titles))[:15]
                 info = "✨ 以下為最新爬取的即時新聞清單：\n\n" + "\n".join(display_titles)
             else:
                 info = "目前資料庫沒有任何新聞，請先手動瀏覽網址：你的網址/news 來觸發爬蟲儲存資料！"
 
-        # 功能 (2) 的邏輯：關鍵字查詢新聞
         elif action == "find_news":
             parameters = req.get("queryResult").get("parameters")
             title_news = parameters.get("title_news")
