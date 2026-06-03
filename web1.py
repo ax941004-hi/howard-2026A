@@ -82,11 +82,9 @@ def webhook2():
         
         # 預設想要查詢的分類
         target_cat = "AI科技" 
-        
-        # 【超強防禦 1】把對話文字轉成小寫，避免大小寫不符合
         query_lower = query_text.lower()
         
-        # 【超強防禦 2】多重關鍵字模糊比對，只要包含這些字，絕對不會漏判
+        # 多重關鍵字模糊比對
         if "3c" in query_lower:
             target_cat = "3C"
         elif "財經" in query_lower or "金融" in query_lower:
@@ -100,7 +98,6 @@ def webhook2():
         elif "ai" in query_lower or "科技" in query_lower:
             target_cat = "AI科技"
         else:
-            # 如果上面都沒對到，用原本的迴圈邏輯再掃一次保險
             for cat in ["3C", "財經", "遊戲", "旅遊", "國際", "AI科技"]:
                 if cat in query_text:
                     target_cat = cat
@@ -110,31 +107,53 @@ def webhook2():
         
         if db:
             try:
-                # 避開複合索引限制，拉出該分類最近的最多 20 則文檔
-                docs = db.collection("news")\
-                         .where("category", "==", target_cat)\
-                         .limit(20)\
-                         .stream()
-                         
-                temp_list = []
-                for doc in docs:
-                    temp_list.append(doc.to_dict())
+                # 【超強核心補丁】既然遊戲新聞常被誤塞成 3C，當使用者查「遊戲」或「3C」時，我們同時掃這兩個分類！
+                categories_to_query = [target_cat]
+                if target_cat in ["遊戲", "3C"]:
+                    categories_to_query = ["遊戲", "3C", "遊戲雲"]
                 
-                # 【超強防禦 3】安全時間排序，防止任何因為時間戳記問題卡死 sort 的特殊狀況
+                temp_list = []
+                for cat_name in categories_to_query:
+                    docs = db.collection("news")\
+                             .where("category", "==", cat_name)\
+                             .limit(30)\
+                             .stream()
+                    for doc in docs:
+                        data_dict = doc.to_dict()
+                        # 如果是查遊戲，我們進行網址模糊過濾，確保挑出來的一定是遊戲雲新聞
+                        if target_cat == "遊戲":
+                            # 檢查網址有沒有包含 /game/，有的話才是真遊戲新聞
+                            if "/game/" in data_dict.get('url', ''):
+                                temp_list.append(data_dict)
+                        elif target_cat == "3C":
+                            # 如果查 3C，就把純 /3c/ 的過濾出來
+                            if "/3c/" in data_dict.get('url', ''):
+                                temp_list.append(data_dict)
+                        else:
+                            temp_list.append(data_dict)
+                
+                # 在 Python 內部利用 created_at 進行由新到舊的排序（安全防護版）
                 try:
                     temp_list.sort(key=lambda x: x.get('created_at') if x.get('created_at') is not None else datetime.min, reverse=True)
                 except Exception as sort_err:
                     print(f"排序發生微小微調: {sort_err}")
-                    # 若因格式異常無法排序，則維持原資料庫拉出的預設順序
                 
-                # 調整為只抓最前面的最新 5 則，包裝成 LINE 訊息
-                for data in temp_list[:5]:
-                    news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 {data.get('url')}")
+                # 剔除重複抓取的新聞，確保點入的 5 則完全唯一
+                seen_titles = set()
+                for data in temp_list:
+                    t_title = data.get('title')
+                    if t_title not in seen_titles:
+                        seen_titles.add(t_title)
+                        # 顯示時，把投胎錯的分類名稱在畫面上修正回來
+                        display_cat = "遊戲" if target_cat == "遊戲" else data.get('category')
+                        news_list.append(f"【{display_cat}】{t_title}\n🔗 {data.get('url')}")
+                    if len(news_list) >= 5:
+                        break
                     
             except Exception as e:
                 print(f"從 Firebase 撈取資料失敗: {e}")
 
-        # 【超強防禦 4】動態補底機制。如果撈完發現是空的，但使用者明明要看遊戲，直接強力手動塞入一則保底連結
+        # 如果透過交叉聯集過濾後依然沒抓到，才走這個保底直達連結
         if not news_list and target_cat == "遊戲":
             news_list.append("【遊戲】ETtoday 遊戲雲新聞中心\n🔗 https://game.ettoday.net/menu/game/")
 
@@ -171,7 +190,6 @@ def webhook2():
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # 已經完美加入了 .part_menu_2 h3 a 的選擇器
             news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
             
             seen_urls = set()
