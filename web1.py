@@ -82,6 +82,7 @@ def webhook2():
         
         # 預設想要查詢的分類
         target_cat = "AI科技" 
+        # 優化關鍵字判斷，精準切換分類
         for cat in ["3C", "財經", "遊戲", "旅遊", "國際", "AI科技"]:
             if cat in query_text:
                 target_cat = cat
@@ -91,8 +92,7 @@ def webhook2():
         
         if db:
             try:
-                # 【修改】拿掉 order_by，只抓取該分類的新聞（避開複合索引限制）
-                # 先拉出最近更新的最多 20 則，再交給 Python 排序
+                # 避開複合索引限制，拉出該分類最近的最多 20 則文檔
                 docs = db.collection("news")\
                          .where("category", "==", target_cat)\
                          .limit(20)\
@@ -102,11 +102,11 @@ def webhook2():
                 for doc in docs:
                     temp_list.append(doc.to_dict())
                 
-                # 【新增】在 Python 內部利用 created_at 進行由新到舊的排序
+                # 在 Python 內部利用 created_at 進行由新到舊的排序
                 temp_list.sort(key=lambda x: x.get('created_at'), reverse=True)
                 
-                # 【新增】排序後，只抓最前面的最新 3 則包裝成訊息
-                for data in temp_list[:3]:
+                # 【修改】調整為只抓最前面的最新 5 則，包裝成 LINE 訊息
+                for data in temp_list[:5]:
                     news_list.append(f"【{data['category']}】{data['title']}\n🔗 {data['url']}")
                     
             except Exception as e:
