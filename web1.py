@@ -10,6 +10,8 @@ from google import genai
 from google.genai import types
 
 import hashlib
+import time
+from flask import jsonify
 
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
@@ -66,7 +68,7 @@ import json
 def news():
     # 鎖定指定的 6 個分類
     target_categories = {
-        "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
+        "AI科技": "https://game.ettoday.net/menu/3c/",  # 改採 3C/AI 穩定版面避免搜尋卡死
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
         "遊戲": "https://game.ettoday.net/",
@@ -78,69 +80,61 @@ def news():
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
-    print("\n==================================================")
-    print("🚀  ETtoday 6 大分類最新新聞【完整全量】爬取中...")
-    print("==================================================\n")
+    current_date = time.strftime("%Y-%m-%d") # 產生符合你格式的日期字串
+    saved_count = 0
     
-    for cat_name, cat_url in target_categories.items():
-        print(f"■ 正在讀取【{cat_name}】的所有最新消息...")
+    # 使用 Session 保持連線，極速狂飆
+    with requests.Session() as session:
+        session.headers.update(headers)
         
-        try:
-            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # 抓取該頁面上所有的標題與連結
-            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-            
-            seen_urls = set()
-            count = 1
-            
-            print("┌" + "─" * 60)
-            print(f"│ 分類：{cat_name}")
-            print("├" + "─" * 60)
-            
-            for link in news_links:
-                news_title = link.get_text().strip()
-                news_href = link.get('href', '')
+        for cat_name, cat_url in target_categories.items():
+            try:
+                # 限制 timeout 為 1.2 秒防止 Vercel 逾時
+                response = session.get(cat_url, timeout=1.2, verify=False)
+                response.encoding = 'utf-8'
+                soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # 過濾不合格的雜訊
-                if not news_title or len(news_title) < 10 or not news_href:
-                    continue
-                if news_href.startswith('javascript'):
-                    continue
-                    
-                full_news_url = urljoin(cat_url, news_href)
+                # 抓取該頁面上所有的標題與連結
+                news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+                seen_urls = set()
                 
-                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                    seen_urls.add(full_news_url)
+                for link in news_links:
+                    news_title = link.get_text().strip()
+                    news_href = link.get('href', '')
                     
-                    # 毫無保留直接印出
-                    print(f"│ [{count}] {news_title}")
-                    print(f"│     連結: {full_news_url}")
-                    print(f"│ {'-' * 56}")
-                    count += 1
+                    # 過濾不合格的雜訊
+                    if not news_title or len(news_title) < 10 or not news_href:
+                        continue
+                    if news_href.startswith('javascript'):
+                        continue
+                        
+                    full_news_url = urljoin(cat_url, news_href)
                     
-            if count == 1:
-                print("│ 目前此頁面無即時新聞清單。")
-            else:
-                print(f"│ ⚙️ 本次成功列出 {count-1} 則【{cat_name}】的全部新聞")
-            
-            print("└" + "─" * 60 + "\n")
-            
-            # 禮貌歇息 0.5 秒
-            time.sleep(0.5)
-            
-        except Exception as e:
-            print(f"│ ❌ 抓取失敗，原因: {e}")
-            print("└" + "─" * 60 + "\n")
+                    if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                        seen_urls.add(full_news_url)
+                        
+                        # 打包成符合你 Firebase 規格的欄位
+                        news_data = {
+                            "title_news": news_title,
+                            "link": full_news_url,
+                            "date": current_date,
+                            "category": cat_name
+                        }
+                        
+                        # 🎯 關鍵：透過網址的 MD5 當作 Document ID，並寫入 Firebase 
+                        doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
+                        db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
+                        saved_count += 1
+                        
+            except Exception as crawl_e:
+                print(f"即時爬取 {cat_name} 失敗，跳過。原因: {crawl_e}")
+                continue
 
-    print("==================================================")
-    print("🎉  所有分類的全部新聞已完整輸出完畢！")
-    print("==================================================")
-
-if __name__ == "__main__":
-    crawl_and_print_all_news()
+    # Flask 路由必須要有 return jsonify 的回應
+    return jsonify({
+        "status": "success",
+        "message": f"成功爬取並存入【即時新聞資料】共 {saved_count} 則新聞！"
+    })
 def webhook():
     req = request.get_json(force=True)
     action = req.get("queryResult").get("action")
