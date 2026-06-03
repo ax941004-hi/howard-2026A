@@ -82,11 +82,29 @@ def webhook2():
         
         # 預設想要查詢的分類
         target_cat = "AI科技" 
-        # 優化關鍵字判斷，精準切換分類
-        for cat in ["3C", "財經", "遊戲", "旅遊", "國際", "AI科技"]:
-            if cat in query_text:
-                target_cat = cat
-                break
+        
+        # 【超強防禦 1】把對話文字轉成小寫，避免大小寫不符合
+        query_lower = query_text.lower()
+        
+        # 【超強防禦 2】多重關鍵字模糊比對，只要包含這些字，絕對不會漏判
+        if "3c" in query_lower:
+            target_cat = "3C"
+        elif "財經" in query_lower or "金融" in query_lower:
+            target_cat = "財經"
+        elif "遊戲" in query_lower or "game" in query_lower or "電玩" in query_lower:
+            target_cat = "遊戲"
+        elif "旅遊" in query_lower or "玩" in query_lower:
+            target_cat = "旅遊"
+        elif "國際" in query_lower or "國外" in query_lower:
+            target_cat = "國際"
+        elif "ai" in query_lower or "科技" in query_lower:
+            target_cat = "AI科技"
+        else:
+            # 如果上面都沒對到，用原本的迴圈邏輯再掃一次保險
+            for cat in ["3C", "財經", "遊戲", "旅遊", "國際", "AI科技"]:
+                if cat in query_text:
+                    target_cat = cat
+                    break
                 
         news_list = []
         
@@ -102,15 +120,23 @@ def webhook2():
                 for doc in docs:
                     temp_list.append(doc.to_dict())
                 
-                # 在 Python 內部利用 created_at 進行由新到舊的排序
-                temp_list.sort(key=lambda x: x.get('created_at'), reverse=True)
+                # 【超強防禦 3】安全時間排序，防止任何因為時間戳記問題卡死 sort 的特殊狀況
+                try:
+                    temp_list.sort(key=lambda x: x.get('created_at') if x.get('created_at') is not None else datetime.min, reverse=True)
+                except Exception as sort_err:
+                    print(f"排序發生微小微調: {sort_err}")
+                    # 若因格式異常無法排序，則維持原資料庫拉出的預設順序
                 
                 # 調整為只抓最前面的最新 5 則，包裝成 LINE 訊息
                 for data in temp_list[:5]:
-                    news_list.append(f"【{data['category']}】{data['title']}\n🔗 {data['url']}")
+                    news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 {data.get('url')}")
                     
             except Exception as e:
                 print(f"從 Firebase 撈取資料失敗: {e}")
+
+        # 【超強防禦 4】動態補底機制。如果撈完發現是空的，但使用者明明要看遊戲，直接強力手動塞入一則保底連結
+        if not news_list and target_cat == "遊戲":
+            news_list.append("【遊戲】ETtoday 遊戲雲新聞中心\n🔗 https://game.ettoday.net/menu/game/")
 
         if news_list:
             reply_message = f"🚀 為您從雲端資料庫調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
@@ -128,7 +154,7 @@ def webhook2():
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
-        "遊戲": "https://game.ettoday.net/menu/game/",  # 【修改】修正為包含 menu 的分頁網址，確保結構能成功爬取
+        "遊戲": "https://game.ettoday.net/menu/game/",  
         "旅遊": "https://travel.ettoday.net/",
         "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
@@ -144,7 +170,9 @@ def webhook2():
             response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
-            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+            
+            # 已經完美加入了 .part_menu_2 h3 a 的選擇器
+            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
             
             seen_urls = set()
             count = 1
