@@ -91,16 +91,24 @@ def webhook2():
         
         if db:
             try:
-                # 直接去 Firebase 撈出該分類最新時間排序的前 3 則新聞 (超快，保證不超時)
+                # 【修改】拿掉 order_by，只抓取該分類的新聞（避開複合索引限制）
+                # 先拉出最近更新的最多 20 則，再交給 Python 排序
                 docs = db.collection("news")\
                          .where("category", "==", target_cat)\
-                         .order_by("created_at", direction=firestore.Query.DESCENDING)\
-                         .limit(3)\
+                         .limit(20)\
                          .stream()
                          
+                temp_list = []
                 for doc in docs:
-                    data = doc.to_dict()
+                    temp_list.append(doc.to_dict())
+                
+                # 【新增】在 Python 內部利用 created_at 進行由新到舊的排序
+                temp_list.sort(key=lambda x: x.get('created_at'), reverse=True)
+                
+                # 【新增】排序後，只抓最前面的最新 3 則包裝成訊息
+                for data in temp_list[:3]:
                     news_list.append(f"【{data['category']}】{data['title']}\n🔗 {data['url']}")
+                    
             except Exception as e:
                 print(f"從 Firebase 撈取資料失敗: {e}")
 
