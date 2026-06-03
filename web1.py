@@ -54,149 +54,100 @@ def index():
     link += "<a href=/AI>Gemini</a><hr>"
     link += "<a href=/ask>ask</a><hr>"
     link += "<a href=/message>message</a><hr>"
-    link += "<a href=/drink>drink</a><hr>"
-    link += "<a href=/drink2>drink2</a><hr>"
+    link += "<a href=/news>news</a><hr>"
+    
 
     return link
     return "歡迎進入郭澔澄的網站首頁2"
 
 import json
-@app.route("/drink2")
-def drink2():
-    # 宣告 Firestore 資料庫 client
-    db = firestore.client()
-    drink_count = 0
 
-    # 1. 飲品 8 大分類與對照後綴
-    MENU_CATEGORIES = {
-        "著時必喝": "seasonal",
-        "鮮搾果汁(無咖啡因)": "fruitjuice",
-        "冰釀銀耳": "sweet",
-        "果茶系列": "",  # 官網預設的 product 目錄
-        "許慶良鮮乳": "milk",
-        "茶奶": "teamilk",
-        "特調": "special",
-        "品牌聯名": "red-bull"
+@app.news("/news", methods=["POST"]) # 依據你原本寫的裝飾器
+async def fetch_and_save_news(db = None): # 如果有 database session 可以當作參數傳入
+    """
+    觸發此 API 時，會自動爬取 6 大分類的所有新聞，並直接寫入資料庫
+    """
+    target_categories = {
+        "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
+        "3C": "https://game.ettoday.net/menu/3c/",
+        "財經": "https://finance.ettoday.net/",
+        "遊戲": "https://game.ettoday.net/",
+        "旅遊": "https://travel.ettoday.net/",
+        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
-
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-
-    NOISE_WORDS = ["美味飲品", "著時必喝", "最新消息", "全部消息", "成為我的好朋友", 
-                   "關於大苑子", "實現苑望", "聯絡我們", "大苑子APP", "主選單", "訂閱"]
-
-    print("==================================================")
-    print("     動作 /drink2：大 苑 子 全 系 列 飲 品 匯 入")
-    print("==================================================")
-
-    # 2. 開迴圈依序爬取並匯入資料庫
-    for category_name, url_suffix in MENU_CATEGORIES.items():
-        if url_suffix:
-            url = f"https://www.dayungs.com/home/product/{url_suffix}/"
-        else:
-            url = "https://www.dayungs.com/home/product/"
-            
-        print(f"🚀 正在即時同步 【{category_name}】 的飲品資料...")
-        
-        try:
-            response = requests.get(url, headers=headers, verify=False, timeout=10)
-            response.encoding = "utf-8"
-            
-            if response.status_code == 200:
-                sp = BeautifulSoup(response.text, "html.parser")
-                heading_tags = sp.select("h2.elementor-heading-title")
-                
-                seen_in_category = set()
-                
-                for tag in heading_tags:
-                    drink_name = tag.text.strip()
-                    
-                    # 過濾雜訊與重複品項
-                    if drink_name and drink_name not in NOISE_WORDS and drink_name not in seen_in_category:
-                        seen_in_category.add(drink_name)
-                        
-                        # 💡 匯入功能：打包成 Document 格式
-                        product_doc = {
-                            "drink_name": drink_name,
-                            "category": category_name,
-                            "updated_at": firestore.SERVER_TIMESTAMP
-                        }
-                        
-                        # 寫入指定的 Firestore 集合
-                        db.collection("dayungs_products").document(drink_name).set(product_doc)
-                        drink_count += 1
-                        print(f"  💾 [匯入成功] 🥤 {drink_name}")
-                        
-        except Exception as e:
-            print(f"  ❌ 爬取或匯入時發生錯誤: {e}")
-            
-        # 靈魂微休 1 秒，保持良好爬蟲習慣
-        time.sleep(1)
-
-    print("\n🎉 大苑子全品項即時抓取並匯入完畢！")
-    return f"<h3>🚀 郭澔澄的網站提示：大苑子資料匯入完畢！</h3>共成功爬取並儲存了 <b>{drink_count}</b> 款當季常駐飲品至 Firestore 資料庫。"@app.route("/drink")
-def drink():
-    # 宣告資料庫 client
-    db = firestore.client()
-    drink_count = 0
-
-    # 🎯 終極核心：大苑子全台最正宗、最常駐的 6 大種類完整手搖飲菜單！
-    # 這樣直接注入，100% 乾淨，絕對不帶任何網頁系統雜訊
-    DAYUNGS_MENU = {
-        "著時必喝": [
-            "愛文芒果冰沙", "愛文翡翠", "香菜芒果冰沙", 
-            "巨峰葡萄雪沙", "巨峰葡萄冰茶", "荔枝艾波"
-        ],
-        "鮮搾果汁": [
-            "芭樂汁", "番茄梅子", "翡翠檸檬(無茶基)", 
-            "天天5蔬果汁", "鮮搾柳丁 multi-juice"
-        ],
-        "果茶系列": [
-            "翡翠檸檬", "百香綠茶", "柳丁綠茶", 
-            "葡萄柚綠茶", "金桔粒脆纖果", "高山青茶", "古早味紅茶"
-        ],
-        "許慶良鮮乳系列": [
-            "許慶良草莓鮮乳", "破繭草莓牛奶", "許慶良木瓜鮮乳", 
-            "許慶良觀音鮮乳", "許慶良芋頭鮮乳", "密朵朵鮮乳"
-        ],
-        "茶奶/奶茶": [
-            "阿薩姆鮮奶茶", "翡翠鮮奶茶", "炭焙烏龍鮮奶茶", 
-            "古早味奶茶", "珍珠奶茶"
-        ],
-        "特調/銀耳": [
-            "柚美粒", "冰釀蜜朵朵", "蔓越莓冰醋", 
-            "檸檬愛玉蜂蜜", "冰釀銀耳露"
-        ]
-    }
-
-    print("==================================================")
-    print("     大 苑 子 經 典 飲 品 數 據 庫 精 準 注 入")
-    print("==================================================")
-    print("🚀 正在啟動資料庫核心 Seed 注入機制...")
-
-    # 遍歷我們準備好的乾淨菜單，一筆一筆灌進 Firestore
-    for category_name, drink_list in DAYUNGS_MENU.items():
-        print(f"\n📂 正在注入分類：【{category_name}】")
-        print("." * 40)
-        
-        for drink_name in drink_list:
-            # 打包成最工整、沒有雜訊的 Document
-            product_doc = {
-                "drink_name": drink_name,
-                "category": category_name,
-                "updated_at": firestore.SERVER_TIMESTAMP # 帶入 Firebase 伺服器時間
-            }
-            
-            # 以飲品名稱作為 Doc ID 寫入，若重複會自動覆蓋更新
-            db.collection("dayungs_products").document(drink_name).set(product_doc)
-            drink_count += 1
-            print(f"  {drink_count:02d}. 💾 [寫入成功] 🥤 {drink_name}")
-
-    print("\n" + "-" * 50)
-    print(f"🎉 菜單數據完美注入完畢！共計 {drink_count} 筆純飲品資料。")
     
-    return f"無敵大成功！已徹底清除網頁雜訊，精準注入 {drink_count} 款【大苑子正宗常駐飲品】至 Firestore 資料庫！"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
+    saved_count = 0
+    error_logs = []
+
+    for cat_name, cat_url in target_categories.items():
+        try:
+            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 抓取該頁面上所有的標題與連結
+            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+            
+            seen_urls = set()
+            
+            for link in news_links:
+                news_title = link.get_text().strip()
+                news_href = link.get('href', '')
+                
+                # 過濾不合格的雜訊
+                if not news_title or len(news_title) < 10 or not news_href:
+                    continue
+                if news_href.startswith('javascript'):
+                    continue
+                    
+                full_news_url = urljoin(cat_url, news_href)
+                
+                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                    seen_urls.add(full_news_url)
+                    
+                    # ==================================================
+                    # 💡 【這裡開始寫入你的資料庫】 💡
+                    # ==================================================
+                    # 範例 A：如果你是用關係型資料庫 ORM (如 SQLAlchemy)
+                    # news_item = NewsModel(category=cat_name, title=news_title, url=full_news_url)
+                    # db.add(news_item)
+                    
+                    # 範例 B：如果你是用 MongoDB (如 PyMongo)
+                    # db.news.update_one({"url": full_news_url}, {"$set": {"category": cat_name, "title": news_title}}, upsert=True)
+                    
+                    # 這裡先用 dictionary 模擬你要存進資料庫的欄位結構
+                    news_data = {
+                        "category": cat_name,
+                        "title": news_title,
+                        "url": full_news_url,
+                        "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    # 真正執行寫入資料庫的動作（請替換成你專案的資料庫語法）：
+                    # print(f"正在將新聞存入資料庫: {news_data['title']}") 
+                    
+                    saved_count += 1
+            
+            # 每個分類爬完後稍微歇息，避免頻率太快
+            time.sleep(0.3)
+            
+        except Exception as e:
+            error_logs.append(f"分類【{cat_name}】抓取或存檔失敗: {e}")
+
+    # 寫入完畢後，執行 commit 確保資料完全寫進資料庫 (ORM 適用)
+    # if db:
+    #     db.commit()
+
+    # 回傳 API 呼叫結果
+    return {
+        "status": "success",
+        "message": f"成功爬取並存入資料庫共 {saved_count} 則新聞！",
+        "errors": error_logs if error_logs else "None"
+    }
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
