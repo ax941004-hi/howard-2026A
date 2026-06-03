@@ -1,6 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
-
+import time
 import os
 import json
 import firebase_admin
@@ -124,7 +124,7 @@ def crawl_and_print_all_news():
                 if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
                     seen_urls.add(full_news_url)
                     
-                    db_status = "層 舊資料已存在"
+                    db_status = "舊資料已存在"
                     
                     # 使用 Firebase Firestore 作為雲端資料庫（取代 SQLite）
                     if db:
