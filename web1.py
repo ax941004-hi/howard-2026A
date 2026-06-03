@@ -1,6 +1,13 @@
 import requests
 from bs4 import BeautifulSoup
 
+import time
+import hashlib
+
+import urllib3
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+
 import os
 import json
 import firebase_admin
@@ -9,9 +16,6 @@ from flask import Flask, render_template, request, make_response, jsonify
 from google import genai
 from google.genai import types
 
-import hashlib
-import time
-from flask import jsonify
 
 # 判斷是在 Vercel 還是本地
 if os.path.exists('serviceAccountKey.json'):
@@ -64,77 +68,115 @@ def index():
 
 import json
 
-@app.route("/news", methods=["POST"])
+@app.route("/news", methods=["GET", "POST"])
 def news():
-    # 鎖定指定的 6 個分類
-    target_categories = {
-        "AI科技": "https://game.ettoday.net/menu/3c/",  # 改採 3C/AI 穩定版面避免搜尋卡死
-        "3C": "https://game.ettoday.net/menu/3c/",
-        "財經": "https://finance.ettoday.net/",
-        "遊戲": "https://game.ettoday.net/",
-        "旅遊": "https://travel.ettoday.net/",
-        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    current_date = time.strftime("%Y-%m-%d") # 產生符合你格式的日期字串
-    saved_count = 0
-    
-    # 使用 Session 保持連線，極速狂飆
-    with requests.Session() as session:
-        session.headers.update(headers)
+    # --------------------------------------------------
+    # 🌐 狀況甲：使用【瀏覽器直接打開】 (GET) -> 執行爬蟲，灌滿資料庫
+    # --------------------------------------------------
+    if request.method == "GET":
+        target_categories = {
+            "AI科技": "https://game.ettoday.net/menu/3c/",
+            "3C": "https://game.ettoday.net/menu/3c/",
+            "財經": "https://finance.ettoday.net/",
+            "遊戲": "https://game.ettoday.net/",
+            "旅遊": "https://travel.ettoday.net/",
+            "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
+        }
         
-        for cat_name, cat_url in target_categories.items():
-            try:
-                # 限制 timeout 為 1.2 秒防止 Vercel 逾時
-                response = session.get(cat_url, timeout=1.2, verify=False)
-                response.encoding = 'utf-8'
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
-                # 抓取該頁面上所有的標題與連結
-                news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-                seen_urls = set()
-                
-                for link in news_links:
-                    news_title = link.get_text().strip()
-                    news_href = link.get('href', '')
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        
+        current_date = time.strftime("%Y-%m-%d")
+        saved_count = 0
+        
+        with requests.Session() as session:
+            session.headers.update(headers)
+            for cat_name, cat_url in target_categories.items():
+                try:
+                    response = session.get(cat_url, timeout=3, verify=False)
+                    response.encoding = 'utf-8'
+                    soup = BeautifulSoup(response.text, 'html.parser')
                     
-                    # 過濾不合格的雜訊
-                    if not news_title or len(news_title) < 10 or not news_href:
-                        continue
-                    if news_href.startswith('javascript'):
-                        continue
-                        
-                    full_news_url = urljoin(cat_url, news_href)
+                    news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+                    seen_urls = set()
                     
-                    if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                        seen_urls.add(full_news_url)
+                    for link in news_links:
+                        news_title = link.get_text().strip()
+                        news_href = link.get('href', '')
                         
-                        # 打包成符合你 Firebase 規格的欄位
-                        news_data = {
-                            "title_news": news_title,
-                            "link": full_news_url,
-                            "date": current_date,
-                            "category": cat_name
-                        }
+                        if not news_title or len(news_title) < 10 or not news_href:
+                            continue
+                        if news_href.startswith('javascript'):
+                            continue
+                            
+                        full_news_url = urljoin(cat_url, news_href)
                         
-                        # 🎯 關鍵：透過網址的 MD5 當作 Document ID，並寫入 Firebase 
-                        doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
-                        db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
-                        saved_count += 1
-                        
-            except Exception as crawl_e:
-                print(f"即時爬取 {cat_name} 失敗，跳過。原因: {crawl_e}")
-                continue
+                        if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                            seen_urls.add(full_news_url)
+                            
+                            news_data = {
+                                "title_news": news_title,
+                                "link": full_news_url,
+                                "date": current_date,
+                                "category": cat_name
+                            }
+                            
+                            # 以網址的 MD5 當作 Document ID，存入「即時新聞資料」
+                            doc_id = hashlib.md5(full_news_url.encode('utf-8')).hexdigest()
+                            db.collection("即時新聞資料").document(doc_id).set(news_data, merge=True)
+                            saved_count += 1
+                            
+                except Exception as e:
+                    print(f"爬取 {cat_name} 失敗: {e}")
+                    continue
 
-    # Flask 路由必須要有 return jsonify 的回應
-    return jsonify({
-        "status": "success",
-        "message": f"成功爬取並存入【即時新聞資料】共 {saved_count} 則新聞！"
-    })
+        return f"<h1>🎉 新聞資料庫更新成功！</h1><p>總共成功寫入了 <b>{saved_count}</b> 筆最新新聞到【即時新聞資料】集合中！請去 Firebase 重新整理看成果吧！</p>"
+
+    # --------------------------------------------------
+    # 🤖 狀況乙：【Dialogflow 送出 POST 請求】 -> 專心迅速回應，決不逾時
+    # --------------------------------------------------
+    elif request.method == "POST":
+        req = request.get_json(force=True)
+        action = req.get("queryResult").get("action")
+        info = "抱歉，我聽不懂你在說什麼新聞。"
+        
+        # 功能 (1) 的邏輯：抓出總清單
+        if action == "GetTitleNewsList":
+            title_news_list = db.collection("即時新聞資料").select(["title_news"]).stream()
+            titles = [doc.get("title_news") for doc in title_news_list if doc.get("title_news")]
+            
+            if titles:
+                display_titles = titles[:15] # 倒出前 15 則
+                info = "✨ 以下為最新爬取的即時新聞清單：\n\n" + "\n".join(display_titles)
+            else:
+                info = "目前資料庫沒有任何新聞，請先手動瀏覽網址：你的網址/news 來觸發爬蟲儲存資料！"
+
+        # 功能 (2) 的邏輯：關鍵字查詢新聞
+        elif action == "find_news":
+            parameters = req.get("queryResult").get("parameters")
+            title_news = parameters.get("title_news")
+            
+            docs = db.collection("即時新聞資料")\
+                     .where("title_news", ">=", title_news)\
+                     .where("title_news", "<=", title_news + "\uf8ff").stream()
+                     
+            response_list = []
+            for doc in docs:
+                course_data = doc.to_dict()
+                result_list = [
+                    f"標題：{course_data.get('title_news', '')}",
+                    f"新聞連結：{course_data.get('link', '')}",
+                    f"日期：{course_data.get('date', '')}\n"
+                ]
+                response_list.append(f"Keywords: {title_news}\n" + "\n".join(result_list))
+                
+            if response_list:
+                info = "\n".join(response_list)
+            else:
+                info = f"找不到有關【{title_news}】的新聞資訊。"
+
+        return make_response(jsonify({"fulfillmentText": info}))
 def webhook():
     req = request.get_json(force=True)
     action = req.get("queryResult").get("action")
