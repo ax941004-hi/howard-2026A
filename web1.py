@@ -74,7 +74,7 @@ import json
 @app.route("/webhook2", methods=["GET", "POST"])
 def webhook2():
     # ==========================================================
-    # 情況 A：LINE / Dialogflow 傳訊息進來 (POST) ➡️ 閃電極速調資料（徹底防重複）
+    # 情況 A：LINE / Dialogflow 傳訊息進來 (POST) ➡️ 輪流拿未看過的新聞
     # ==========================================================
     if request.method == "POST":
         req = request.get_json(silent=True, force=True)
@@ -94,36 +94,91 @@ def webhook2():
                     target_cat = cat
                     break
                 
-        news_list = []
+        reply_message = ""
         
         if db:
             try:
-                # 直接定點讀取快取文檔（耗時只需 0.1 秒，絕對不重複發送）
-                cache_ref = db.collection("latest_cache").document(target_cat)
-                cache_doc = cache_ref.get()
-                if cache_doc.exists:
-                    news_list = cache_doc.to_dict().get("news", [])
+                # 1. 先去撈大倉庫裡面，該分類「尚未看過」的新聞（最前 5 則）
+                docs = db.collection("news")\
+                         .where("category", "==", target_cat)\
+                         .where("viewed", "==", False)\
+                         .limit(5)\
+                         .stream()
+                         
+                chosen_docs = []
+                news_list = []
+                
+                for doc in docs:
+                    chosen_docs.append(doc)
+                    data = doc.to_dict()
+                    news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 {data.get('url')}")
+                
+                # 2. 如果不夠 5 則，說明大倉庫已經被你看完了！觸發「大循環重置」
+                if len(news_list) < 5:
+                    # 撈出大倉庫裡該分類「所有看過」的新聞
+                    all_viewed_docs = db.collection("news")\
+                                        .where("category", "==", target_cat)\
+                                        .where("viewed", "==", True)\
+                                        .stream()
+                    
+                    # 批次把 viewed 全部改回 False
+                    batch = db.batch()
+                    reset_count = 0
+                    for d in all_viewed_docs:
+                        batch.update(d.reference, {"viewed": False})
+                        reset_count += 1
+                        if reset_count >= 400: # 避免批次超過 Firebase 單次上限
+                            batch.commit()
+                            batch = db.batch()
+                            reset_count = 0
+                    batch.commit()
+                    
+                    # 重置後重新補撈一次
+                    retry_docs = db.collection("news")\
+                                   .where("category", "==", target_cat)\
+                                   .where("viewed", "==", False)\
+                                   .limit(5)\
+                                   .stream()
+                    
+                    chosen_docs = []
+                    news_list = []
+                    for doc in retry_docs:
+                        chosen_docs.append(doc)
+                        data = doc.to_dict()
+                        news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 {data.get('url')}")
+                    
+                    if news_list:
+                        reply_message = f"🔄 提示：【{target_cat}】的新聞已被您全數看過一遍，已為您重置大循環！\n\n"
+                
+                # 3. 關鍵動作：把這次要秀給你看的 5 則新聞，在後台更新標記為 viewed = True
+                if chosen_docs:
+                    batch = db.batch()
+                    for doc in chosen_docs:
+                        batch.update(doc.reference, {"viewed": True})
+                    batch.commit()
+                    
+                if news_list:
+                    reply_message += f"🚀 為您調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
+                else:
+                    reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開網頁發動爬蟲儲存資料！"
+                    
             except Exception as e:
-                print(f"極速讀取快取失敗: {e}")
-
-        if news_list:
-            reply_message = f"🚀 為您調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
-        else:
-            reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開網頁發動爬蟲更新快取！"
+                print(f"撈取不重複新聞失敗: {e}")
+                reply_message = "❌ 資料庫查詢出了點狀況，請稍後再試！"
 
         return jsonify({
             "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
         })
 
     # ==========================================================
-    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 毫無限制、極速塞滿大倉庫並更新快取
+    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 負責大量灌入新聞（不干涉 viewed）
     # ==========================================================
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
         "旅遊": "https://travel.ettoday.net/",
-        "國際": "https://www.ettoday.net/news_focus/%E5%9C%8B%E9%9A%9B/"
+        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
     
     headers = {
@@ -142,7 +197,6 @@ def webhook2():
             seen_urls = set()
             count = 1
             db_save_count = 0
-            cat_cache_list = []
             
             for link in news_links:
                 news_title = link.get_text().strip()
@@ -154,38 +208,32 @@ def webhook2():
                 if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
                     seen_urls.add(full_news_url)
                     
-                    if len(cat_cache_list) < 5:
-                        cat_cache_list.append(f"【{cat_name}】{news_title}\n🔗 {full_news_url}")
-                    
                     if db:
                         doc_id = json.dumps(full_news_url).encode('utf-8')
                         doc_id_hash = hashlib.md5(doc_id).hexdigest()
                         doc_ref = db.collection("news").document(doc_id_hash)
                         
-                        # 【核心修正】拿掉超慢的 .get().exists 檢查，直接盲塞 set() 覆蓋，速度直接起飛！
-                        doc_ref.set({
-                            "category": cat_name,
-                            "title": news_title,
-                            "url": full_news_url,
-                            "created_at": datetime.utcnow()
-                        })
-                        db_save_count += 1
+                        # 只有當這則新聞是「第一次被寫入資料庫」時，才設定 viewed = False
+                        # 避免每次跑爬蟲都去把已經看完的新聞洗成 False。
+                        if not doc_ref.get().exists:
+                            doc_ref.set({
+                                "category": cat_name,
+                                "title": news_title,
+                                "url": full_news_url,
+                                "created_at": datetime.utcnow(),
+                                "viewed": False  # 👈 核心關鍵欄位
+                            })
+                            db_save_count += 1
                     count += 1
             
-            if db and cat_cache_list:
-                db.collection("latest_cache").document(cat_name).set({
-                    "news": cat_cache_list,
-                    "updated_at": datetime.utcnow()
-                })
-            
-            summary[cat_name] = f"成功處理 {count-1} 則新聞並同步快取"
+            summary[cat_name] = f"掃描到 {count-1} 則 (全新儲入 {db_save_count} 則)"
             time.sleep(0.3)
         except Exception as e:
             summary[cat_name] = f"失敗: {e}"
 
     return jsonify({
         "status": "success",
-        "message": "大倉庫塞滿、快取包更新完成！",
+        "message": "大倉庫新聞同步更新完成！輪流閱覽機制已就緒！",
         "result": summary
     })
 @app.route("/webhook", methods=["POST"])
