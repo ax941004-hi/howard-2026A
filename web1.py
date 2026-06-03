@@ -80,17 +80,15 @@ def webhook2():
         req = request.get_json(silent=True, force=True)
         query_text = req.get("queryResult", {}).get("queryText", "")
         
-        # 預設想要查詢的分類
+        # 預設想要查詢的分類（剩 5 個分類）
         target_cat = "AI科技" 
         query_lower = query_text.lower()
         
-        # 多重關鍵字模糊比對
+        # 多重關鍵字模糊比對（移除了遊戲分類）
         if "3c" in query_lower:
             target_cat = "3C"
         elif "財經" in query_lower or "金融" in query_lower:
             target_cat = "財經"
-        elif "遊戲" in query_lower or "game" in query_lower or "電玩" in query_lower:
-            target_cat = "遊戲"
         elif "旅遊" in query_lower or "玩" in query_lower:
             target_cat = "旅遊"
         elif "國際" in query_lower or "國外" in query_lower:
@@ -98,7 +96,7 @@ def webhook2():
         elif "ai" in query_lower or "科技" in query_lower:
             target_cat = "AI科技"
         else:
-            for cat in ["3C", "財經", "遊戲", "旅遊", "國際", "AI科技"]:
+            for cat in ["3C", "財經", "旅遊", "國際", "AI科技"]:
                 if cat in query_text:
                     target_cat = cat
                     break
@@ -107,55 +105,34 @@ def webhook2():
         
         if db:
             try:
-                # 【超強核心補丁】既然遊戲新聞常被誤塞成 3C，當使用者查「遊戲」或「3C」時，我們同時掃這兩個分類！
-                categories_to_query = [target_cat]
-                if target_cat in ["遊戲", "3C"]:
-                    categories_to_query = ["遊戲", "3C", "遊戲雲"]
-                
+                # 單純且極速地撈出該分類最新 8 則，完全防止超時重複發送
+                docs = db.collection("news")\
+                         .where("category", "==", target_cat)\
+                         .limit(8)\
+                         .stream()
+                         
                 temp_list = []
-                for cat_name in categories_to_query:
-                    docs = db.collection("news")\
-                             .where("category", "==", cat_name)\
-                             .limit(30)\
-                             .stream()
-                    for doc in docs:
-                        data_dict = doc.to_dict()
-                        # 如果是查遊戲，我們進行網址模糊過濾，確保挑出來的一定是遊戲雲新聞
-                        if target_cat == "遊戲":
-                            # 檢查網址有沒有包含 /game/，有的話才是真遊戲新聞
-                            if "/game/" in data_dict.get('url', ''):
-                                temp_list.append(data_dict)
-                        elif target_cat == "3C":
-                            # 如果查 3C，就把純 /3c/ 的過濾出來
-                            if "/3c/" in data_dict.get('url', ''):
-                                temp_list.append(data_dict)
-                        else:
-                            temp_list.append(data_dict)
+                for doc in docs:
+                    temp_list.append(doc.to_dict())
                 
-                # 在 Python 內部利用 created_at 進行由新到舊的排序（安全防護版）
+                # 在 Python 內部利用 created_at 進行由新到舊的排序
                 try:
                     temp_list.sort(key=lambda x: x.get('created_at') if x.get('created_at') is not None else datetime.min, reverse=True)
                 except Exception as sort_err:
-                    print(f"排序發生微小微調: {sort_err}")
+                    print(f"排序微調: {sort_err}")
                 
-                # 剔除重複抓取的新聞，確保點入的 5 則完全唯一
+                # 剔除重複，精選出前 5 則最新新聞
                 seen_titles = set()
                 for data in temp_list:
                     t_title = data.get('title')
                     if t_title not in seen_titles:
                         seen_titles.add(t_title)
-                        # 顯示時，把投胎錯的分類名稱在畫面上修正回來
-                        display_cat = "遊戲" if target_cat == "遊戲" else data.get('category')
-                        news_list.append(f"【{display_cat}】{t_title}\n🔗 {data.get('url')}")
+                        news_list.append(f"【{data.get('category')}】{t_title}\n🔗 {data.get('url')}")
                     if len(news_list) >= 5:
                         break
                     
             except Exception as e:
                 print(f"從 Firebase 撈取資料失敗: {e}")
-
-        # 如果透過交叉聯集過濾後依然沒抓到，才走這個保底直達連結
-        if not news_list and target_cat == "遊戲":
-            news_list.append("【遊戲】ETtoday 遊戲雲新聞中心\n🔗 https://game.ettoday.net/menu/game/")
 
         if news_list:
             reply_message = f"🚀 為您從雲端資料庫調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
@@ -169,11 +146,11 @@ def webhook2():
     # ==========================================================
     # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 毫無時間限制地把新聞塞滿 Firebase
     # ==========================================================
+    # 目標網頁精簡為 5 個分類
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
-        "遊戲": "https://game.ettoday.net/menu/game/",  
         "旅遊": "https://travel.ettoday.net/",
         "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
@@ -190,6 +167,7 @@ def webhook2():
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
             
+            # 使用全網大通用的新聞連結選擇器
             news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
             
             seen_urls = set()
@@ -228,7 +206,7 @@ def webhook2():
 
     return jsonify({
         "status": "success",
-        "message": "全量新聞爬取並同步 Firebase 完成！",
+        "message": "精簡版 5 大新聞爬取並同步 Firebase 完成！",
         "result": summary
     })
 @app.route("/webhook", methods=["POST"])
