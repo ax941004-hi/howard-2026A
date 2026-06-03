@@ -9,9 +9,6 @@ from flask import Flask, render_template, request, make_response, jsonify
 from google import genai
 from google.genai import types
 
-import sqlite3
-from sqlite3 import Error
-
 import hashlib
 
 # 判斷是在 Vercel 還是本地
@@ -26,12 +23,21 @@ else:
 
 firebase_admin.initialize_app(cred)
 
+# ======== 補上這兩行！宣告全域的 db 變數 ========
+from firebase_admin import firestore
+db = firestore.client()
 
 import firebase_admin
 
 from flask import Flask, render_template,request
 from datetime import datetime
 import random
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+from urllib.parse import urljoin
+
 app = Flask(__name__)
 
 @app.route("/")
@@ -65,18 +71,8 @@ def index():
 
 import json
 
-收到！那就維持你原本整隻程式的結構（包含你的 print 排版風格與畫框設計），我們只聚焦在 @app.route("/news") 這個函式內部進行修改。
-
-這裡為你單獨重寫 @app.route("/news") 的內容。我幫你加入了 SQLite 資料庫的連線與寫入邏輯，並且在畫框中加上了資料庫的儲存狀態，同時補上 Flask 必備的 return 結尾：
-
-Python
-import sqlite3
-from sqlite3 import Error
-
-
 @app.route("/news", methods=["GET", "POST"])
 def crawl_and_print_all_news():
-    # 鎖定指定的 6 個分類
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
@@ -85,121 +81,101 @@ def crawl_and_print_all_news():
         "旅遊": "https://travel.ettoday.net/",
         "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
-
+    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-
+    
     print("\n==================================================")
     print("🚀  ETtoday 6 大分類最新新聞【完整全量】爬取中...")
     print("==================================================\n")
-
-    # 【新增】連接資料庫並建立資料表（如果不存在的話）
-    conn = sqlite3.connect('news.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS news (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT,
-            title TEXT,
-            url TEXT UNIQUE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-
-    # 用於紀錄最後給前端的統計回應
+    
     summary = {}
-
+    
     for cat_name, cat_url in target_categories.items():
         print(f"■ 正在讀取【{cat_name}】的所有最新消息...")
-
+        
         try:
-            response = requests.get(
-                cat_url, headers=headers, timeout=10, verify=False)
+            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
-
-            # 抓取該頁面上所有的標題與連結
-            news_links = soup.select(
-                '.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-
+            
+            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+            
             seen_urls = set()
             count = 1
-            db_save_count = 0  # 【新增】統計真正成功新寫入資料庫的數量
-
+            db_save_count = 0
+            
             print("┌" + "─" * 60)
             print(f"│ 分類：{cat_name}")
             print("├" + "─" * 60)
-
+            
             for link in news_links:
                 news_title = link.get_text().strip()
                 news_href = link.get('href', '')
-
-                # 過濾不合格的雜訊
+                
                 if not news_title or len(news_title) < 10 or not news_href:
                     continue
                 if news_href.startswith('javascript'):
                     continue
-
+                    
                 full_news_url = urljoin(cat_url, news_href)
-
+                
                 if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
                     seen_urls.add(full_news_url)
-
-                    # 【新增】將資料塞入資料庫 (使用 INSERT OR IGNORE 避免重複網址報錯)
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO news (category, title, url) VALUES (?, ?, ?)",
-                        (cat_name, news_title, full_news_url)
-                    )
-                    # 如果 rowcount > 0 代表這是一筆「全新」寫入的資料
-                    if cursor.rowcount > 0:
-                        db_save_count += 1
-                        db_status = "🆕 已存資料庫"
-                    else:
-                        db_status = "層 舊資料已存在"
-
-                    # 毫無保留直接印出
+                    
+                    db_status = "層 舊資料已存在"
+                    
+                    # 使用 Firebase Firestore 作為雲端資料庫（取代 SQLite）
+                    if db:
+                        # 用網址做雜湊當作 Document ID，防止重複寫入
+                        doc_id = json.dumps(full_news_url).encode('utf-8')
+                        import hashlib
+                        doc_id_hash = hashlib.md5(doc_id).hexdigest()
+                        
+                        doc_ref = db.collection("news").document(doc_id_hash)
+                        
+                        # 檢查雲端是否已有此新聞
+                        if not doc_ref.get().exists:
+                            doc_ref.set({
+                                "category": cat_name,
+                                "title": news_title,
+                                "url": full_news_url,
+                                "created_at": datetime.utcnow()
+                            })
+                            db_save_count += 1
+                            db_status = "🆕 已存雲端 Firebase"
+                    
                     print(f"│ [{count}] {news_title}")
                     print(f"│      連結: {full_news_url}")
                     print(f"│      狀態: {db_status}")
                     print(f"│ {'-' * 56}")
                     count += 1
-
-            # 每一頁爬完就 commit 存檔一次
-            conn.commit()
-
+                    
             if count == 1:
                 print("│ 目前此頁面無即時新聞清單。")
                 summary[cat_name] = "無新聞"
             else:
-                print(
-                    f"│ ⚙️ 本次成功列出 {count-1} 則【{cat_name}】新聞，其中新寫入資料庫: {db_save_count} 則")
+                print(f"│ ⚙️ 本次成功列出 {count-1} 則【{cat_name}】新聞，新寫入 Firebase: {db_save_count} 則")
                 summary[cat_name] = f"列出 {count-1} 則 (新寫入 {db_save_count} 則)"
-
+                
             print("└" + "─" * 60 + "\n")
-
-            # 禮貌歇息 0.5 秒
             time.sleep(0.5)
-
+            
         except Exception as e:
             print(f"│ ❌ 抓取失敗，原因: {e}")
             print("└" + "─" * 60 + "\n")
             summary[cat_name] = f"失敗: {e}"
 
-    # 關閉資料庫連線
-    conn.close()
-
     print("==================================================")
-    print("🎉  所有分類的全部新聞已完整輸出並同步寫入資料庫！")
+    print("🎉  所有新聞已同步處理完畢！")
     print("==================================================")
-
-    # 【新增】Flask 必須 return 內容，否則瀏覽器訪問時會噴 500 錯誤
-    return {
+    
+    return jsonify({
         "status": "success",
-        "message": "Crawl and Database Sync Completed",
+        "message": "Crawl and Firebase Sync Completed",
         "result": summary
-    }
+    })
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
@@ -663,7 +639,8 @@ def weather():
         return f"天氣資料抓取失敗：{e} <br><a href='/'>回首頁</a>"
 
 
-client = genai.Client()
+# 把 "你的_GEMINI_API_KEY_字串" 替換成你從 Google AI Studio 申請到的金鑰
+client = genai.Client(api_key="AIzaSy...")
 @app.route("/AI")
 def AI():
     # 每次使用者拜訪該路徑時，直接使用全域的 client 呼叫模型
