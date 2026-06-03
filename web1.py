@@ -74,91 +74,47 @@ import json
 @app.route("/webhook2", methods=["GET", "POST"])
 def webhook2():
     # ==========================================================
-    # 情況 A：如果 Dialogflow 透過 POST 把使用者的訊息丟進來了
+    # 情況 A：LINE / Dialogflow 傳訊息進來 (POST) ➡️ 快速從資料庫拿資料回傳
     # ==========================================================
     if request.method == "POST":
         req = request.get_json(silent=True, force=True)
-        print("📥 收到來自 Dialogflow 的請求")
-        
-        # 解析使用者在 LINE 到底打了什麼字（或是匹配到什麼 intent）
         query_text = req.get("queryResult", {}).get("queryText", "")
         
-        # 1. 先執行你原本寫好的爬蟲（去撈最新新聞並塞進 Firebase）
-        # 這裡會自動幫你跑完整個網頁的爬取與更新
-        target_categories = {
-            "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
-            "3C": "https://game.ettoday.net/menu/3c/",
-            "財經": "https://finance.ettoday.net/",
-            "遊戲": "https://game.ettoday.net/",
-            "旅遊": "https://travel.ettoday.net/",
-            "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
-        }
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
+        # 預設想要查詢的分類
+        target_cat = "AI科技" 
+        for cat in ["3C", "財經", "遊戲", "旅遊", "國際", "AI科技"]:
+            if cat in query_text:
+                target_cat = cat
+                break
+                
+        news_list = []
         
-        news_list = []  # 用來挑選幾則新聞丟回給 LINE 使用者看
-        
-        # 為了不要讓 LINE 等太久（LINE 超時限制為 5 秒），我們只抓特定分類或前幾條
-        # 這裡示範撈取「AI科技」與「3C」的最新幾則
-        for cat_name, cat_url in target_categories.items():
-            # 如果使用者打的字包含分類名稱，或者是打全體「新聞」，我們就抓取
-            if cat_name in query_text or query_text in ["新聞", "今天新聞"]:
-                try:
-                    response = requests.get(cat_url, headers=headers, timeout=5, verify=False)
-                    response.encoding = 'utf-8'
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-                    
-                    seen_urls = set()
-                    for link in news_links:
-                        news_title = link.get_text().strip()
-                        news_href = link.get('href', '')
-                        if not news_title or len(news_title) < 10 or not news_href:
-                            continue
-                        full_news_url = urljoin(cat_url, news_href)
-                        
-                        if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                            seen_urls.add(full_news_url)
-                            
-                            # 順便存入 Firebase 資料庫 (你原本的邏輯)
-                            if db:
-                                doc_id = json.dumps(full_news_url).encode('utf-8')
-                                doc_id_hash = hashlib.md5(doc_id).hexdigest()
-                                doc_ref = db.collection("news").document(doc_id_hash)
-                                if not doc_ref.get().exists:
-                                    doc_ref.set({
-                                        "category": cat_name,
-                                        "title": news_title,
-                                        "url": full_news_url,
-                                        "created_at": datetime.utcnow()
-                                    })
-                            
-                            # 收集要丟回給 LINE 的新聞 (每個分類我們拿最新的 2 則就好，免得字數炸掉)
-                            if len(news_list) < 5:
-                                news_list.append(f"【{cat_name}】{news_title}\n🔗 {full_news_url}")
-                except Exception as e:
-                    print(f"抓取失敗: {e}")
+        if db:
+            try:
+                # 直接去 Firebase 撈出該分類最新時間排序的前 3 則新聞 (超快，保證不超時)
+                docs = db.collection("news")\
+                         .where("category", "==", target_cat)\
+                         .order_by("created_at", direction=firestore.Query.DESCENDING)\
+                         .limit(3)\
+                         .stream()
+                         
+                for doc in docs:
+                    data = doc.to_dict()
+                    news_list.append(f"【{data['category']}】{data['title']}\n🔗 {data['url']}")
+            except Exception as e:
+                print(f"從 Firebase 撈取資料失敗: {e}")
 
-        # 2. 組合要回傳給 LINE 聊天室的文字訊息
         if news_list:
-            reply_message = "🚀 為您奉上即時新聞，已同步儲存至雲端資料庫：\n\n" + "\n\n".join(news_list)
+            reply_message = f"🚀 為您從雲端資料庫調出最新【{target_cat}】新聞：\n\n" + "\n\n".join(news_list)
         else:
-            reply_message = f"處理成功！已為您更新並同步雲端新聞資料庫庫存。想看實時內容請輸入分類名稱（如：AI科技、3C）喔！"
+            reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開網頁發動爬蟲儲存資料！"
 
-        # 3. **核心關鍵**：包裝成 Dialogflow 認得的 Fulfillment 回傳格式
         return jsonify({
-            "fulfillmentMessages": [
-                {
-                    "text": {
-                        "text": [reply_message]
-                    }
-                }
-            ]
+            "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
         })
 
     # ==========================================================
-    # 情況 B：如果你自己在瀏覽器打開網址 (GET)，就執行你原本的全量統計報告
+    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 毫無時間限制地把新聞塞滿 Firebase
     # ==========================================================
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
@@ -168,15 +124,57 @@ def webhook2():
         "旅遊": "https://travel.ettoday.net/",
         "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
-    headers = {'User-Agent': 'Mozilla/5.0...'}
+    
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+    
     summary = {}
     
-    # ... 這裡放你原本完整跑 6 個分類、輸出 print 畫框的完整爬蟲代碼 ...
-    # (保持原樣，讓你在瀏覽器看的時候依然有精美的 JSON 統計)
+    for cat_name, cat_url in target_categories.items():
+        try:
+            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
+            response.encoding = 'utf-8'
+            soup = BeautifulSoup(response.text, 'html.parser')
+            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+            
+            seen_urls = set()
+            count = 1
+            db_save_count = 0
+            
+            for link in news_links:
+                news_title = link.get_text().strip()
+                news_href = link.get('href', '')
+                if not news_title or len(news_title) < 10 or not news_href:
+                    continue
+                full_news_url = urljoin(cat_url, news_href)
+                
+                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                    seen_urls.add(full_news_url)
+                    
+                    if db:
+                        doc_id = json.dumps(full_news_url).encode('utf-8')
+                        doc_id_hash = hashlib.md5(doc_id).hexdigest()
+                        doc_ref = db.collection("news").document(doc_id_hash)
+                        
+                        if not doc_ref.get().exists:
+                            doc_ref.set({
+                                "category": cat_name,
+                                "title": news_title,
+                                "url": full_news_url,
+                                "created_at": datetime.utcnow()
+                            })
+                            db_save_count += 1
+                    count += 1
+            
+            summary[cat_name] = f"列出 {count-1} 則 (新寫入 {db_save_count} 則)"
+            time.sleep(0.5)
+        except Exception as e:
+            summary[cat_name] = f"失敗: {e}"
 
     return jsonify({
         "status": "success",
-        "message": "Crawl and Firebase Sync Completed",
+        "message": "全量新聞爬取並同步 Firebase 完成！",
         "result": summary
     })
 @app.route("/webhook", methods=["POST"])
