@@ -105,7 +105,7 @@ def webhook2():
                 # 在 Python 內部利用 created_at 進行由新到舊的排序
                 temp_list.sort(key=lambda x: x.get('created_at'), reverse=True)
                 
-                # 【修改】調整為只抓最前面的最新 5 則，包裝成 LINE 訊息
+                # 調整為只抓最前面的最新 5 則，包裝成 LINE 訊息
                 for data in temp_list[:5]:
                     news_list.append(f"【{data['category']}】{data['title']}\n🔗 {data['url']}")
                     
@@ -128,7 +128,7 @@ def webhook2():
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
         "財經": "https://finance.ettoday.net/",
-        "遊戲": "https://game.ettoday.net/",
+        "遊戲": "https://game.ettoday.net/menu/game/",  # 【修改】修正為包含 menu 的分頁網址，確保結構能成功爬取
         "旅遊": "https://travel.ettoday.net/",
         "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
