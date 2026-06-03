@@ -63,7 +63,7 @@ def index():
     link += "<a href=/AI>Gemini</a><hr>"
     link += "<a href=/ask>ask</a><hr>"
     link += "<a href=/message>message</a><hr>"
-    link += "<a href=/news>news</a><hr>"
+    link += "<a href=/webhook2>news</a><hr>"
     
 
     return link
@@ -71,8 +71,8 @@ def index():
 
 import json
 
-@app.route("/news", methods=["GET", "POST"])
-def crawl_and_print_all_news():
+@app.route("/webhook2", methods=["GET", "POST"])
+def webhook2():
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
         "3C": "https://game.ettoday.net/menu/3c/",
