@@ -99,12 +99,14 @@ def webhook2():
     
     if db:
         try:
+            # 🚀 導入 FieldFilter 模組
             from google.cloud.firestore_v1.base_query import FieldFilter
 
             # 1. 撈出該分類「尚未看過」的新聞（最前 5 則）
+            # 💡 【核心修正】：改用舊版相容的 .where(filter=FieldFilter(...)) 寫法
             docs = db.collection("news")\
-                     .filter(filter=FieldFilter("category", "==", target_cat))\
-                     .filter(filter=FieldFilter("viewed", "==", False))\
+                     .where(filter=FieldFilter("category", "==", target_cat))\
+                     .where(filter=FieldFilter("viewed", "==", False))\
                      .limit(5)\
                      .stream() 
                      
@@ -117,9 +119,10 @@ def webhook2():
                 
             # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
             if len(news_list) < 5:
+                # 💡 【核心修正】：改用 .where(filter=FieldFilter(...)) 寫法
                 all_viewed_docs = db.collection("news")\
-                                    .filter(filter=FieldFilter("category", "==", target_cat))\
-                                    .filter(filter=FieldFilter("viewed", "==", True))\
+                                    .where(filter=FieldFilter("category", "==", target_cat))\
+                                    .where(filter=FieldFilter("viewed", "==", True))\
                                     .stream()
                 batch = db.batch()
                 reset_count = 0
@@ -133,9 +136,10 @@ def webhook2():
                 batch.commit()
                 
                 # 重置後重新補撈
+                # 💡 【核心修正】：改用 .where(filter=FieldFilter(...)) 寫法
                 retry_docs = db.collection("news")\
-                               .filter(filter=FieldFilter("category", "==", target_cat))\
-                               .filter(filter=FieldFilter("viewed", "==", False))\
+                               .where(filter=FieldFilter("category", "==", target_cat))\
+                               .where(filter=FieldFilter("viewed", "==", False))\
                                .limit(5)\
                                .stream()
                 chosen_docs = []
