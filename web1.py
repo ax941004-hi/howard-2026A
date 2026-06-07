@@ -75,15 +75,12 @@ import json
 def ping():
     return "Wake up! 伺服器運作中！", 200
 
-@app.route("/webhook2", methods=["POST"])  # 🚀 改為只接收 POST，速度更快
+@app.route("/webhook2", methods=["POST"]) 
 def webhook2():
     req = request.get_json(silent=True, force=True)
-    
-    # 🚀 最佳化：直接向 Dialogflow 拿「已經分類好」的參數
     parameters = req.get("queryResult", {}).get("parameters", {})
     target_cat = parameters.get("news", "")
     
-    # 如果 Dialogflow 沒有抓到，再用字串比對當作備用防線
     if not target_cat:
         query_text = req.get("queryResult", {}).get("queryText", "")
         query_lower = query_text.lower()
@@ -93,17 +90,15 @@ def webhook2():
         elif "國際" in query_lower or "國外" in query_lower: target_cat = "國際"
         elif "ai" in query_lower or "科技" in query_lower: target_cat = "AI科技"
         else:
-            target_cat = "AI科技" # 給一個最終預設值避免報錯
+            target_cat = "AI科技"  
             
     reply_message = ""
     
     if db:
         try:
-            # 🚀 導入 FieldFilter 模組
             from google.cloud.firestore_v1.base_query import FieldFilter
-
+            
             # 1. 撈出該分類「尚未看過」的新聞（最前 5 則）
-            # 💡 【核心修正】：改用舊版相容的 .where(filter=FieldFilter(...)) 寫法
             docs = db.collection("news")\
                      .where(filter=FieldFilter("category", "==", target_cat))\
                      .where(filter=FieldFilter("viewed", "==", False))\
@@ -118,8 +113,8 @@ def webhook2():
                 news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                 
             # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
+            # 💡【已修正】：將大寫 Len 改為小寫 len
             if len(news_list) < 5:
-                # 💡 【核心修正】：改用 .where(filter=FieldFilter(...)) 寫法
                 all_viewed_docs = db.collection("news")\
                                     .where(filter=FieldFilter("category", "==", target_cat))\
                                     .where(filter=FieldFilter("viewed", "==", True))\
@@ -136,7 +131,6 @@ def webhook2():
                 batch.commit()
                 
                 # 重置後重新補撈
-                # 💡 【核心修正】：改用 .where(filter=FieldFilter(...)) 寫法
                 retry_docs = db.collection("news")\
                                .where(filter=FieldFilter("category", "==", target_cat))\
                                .where(filter=FieldFilter("viewed", "==", False))\
@@ -172,7 +166,8 @@ def webhook2():
         "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
     })
 
-@app.route("/crawl", methods=["GET"])  # 🚀 改去這個乾淨的新網址跑爬蟲
+# 💡【已修正】：刪除了路由末端誤觸的字母 Z
+@app.route("/crawl", methods=["GET"])
 def crawl_news():
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
@@ -181,11 +176,9 @@ def crawl_news():
         "旅遊": "https://travel.ettoday.net/",
         "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
     }
-    
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-    
     summary = {}
     
     for cat_name, cat_url in target_categories.items():
