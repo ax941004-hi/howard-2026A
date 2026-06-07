@@ -71,6 +71,13 @@ def index():
 
 import json
 
+@app.route("/ping", methods=["GET"])
+def ping():
+    return "Wake up! 伺服器運作中！", 200
+
+# ==========================================================
+# 【優化版】新聞爬蟲與 Dialogflow 回覆路由
+# ==========================================================
 @app.route("/webhook2", methods=["GET", "POST"])
 def webhook2():
     # ==========================================================
@@ -78,21 +85,23 @@ def webhook2():
     # ==========================================================
     if request.method == "POST":
         req = request.get_json(silent=True, force=True)
-        query_text = req.get("queryResult", {}).get("queryText", "")
         
-        target_cat = "AI科技" 
-        query_lower = query_text.lower()
-        if "3c" in query_lower: target_cat = "3C"
-        elif "財經" in query_lower or "金融" in query_lower: target_cat = "財經"
-        elif "旅遊" in query_lower or "玩" in query_lower: target_cat = "旅遊"
-        elif "國際" in query_lower or "國外" in query_lower: target_cat = "國際"
-        elif "ai" in query_lower or "科技" in query_lower: target_cat = "AI科技"
-        else:
-            for cat in ["3C", "財經", "旅遊", "國際", "AI科技"]:
-                if cat in query_text:
-                    target_cat = cat
-                    break       
-                    
+        # 🚀 最佳化：直接向 Dialogflow 拿「已經分類好」的參數
+        parameters = req.get("queryResult", {}).get("parameters", {})
+        target_cat = parameters.get("news", "")
+        
+        # 如果 Dialogflow 沒有抓到，再用字串比對當作備用防線
+        if not target_cat:
+            query_text = req.get("queryResult", {}).get("queryText", "")
+            query_lower = query_text.lower()
+            if "3c" in query_lower: target_cat = "3C"
+            elif "財經" in query_lower or "金融" in query_lower: target_cat = "財經"
+            elif "旅遊" in query_lower or "玩" in query_lower: target_cat = "旅遊"
+            elif "國際" in query_lower or "國外" in query_lower: target_cat = "國際"
+            elif "ai" in query_lower or "科技" in query_lower: target_cat = "AI科技"
+            else:
+                target_cat = "AI科技" # 給一個最終預設值避免報錯
+                
         reply_message = ""
         
         if db:
@@ -109,7 +118,6 @@ def webhook2():
                 for doc in docs:
                     chosen_docs.append(doc)
                     data = doc.to_dict()
-                    # 【核心修正】在網址前方加上中文字說明，徹底破壞 LINE 網址自動預覽機制，防止對話框卡死錯位！
                     news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                     
                 # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
@@ -140,7 +148,6 @@ def webhook2():
                     for doc in retry_docs:
                         chosen_docs.append(doc)
                         data = doc.to_dict()
-                        # 【核心修正】這裡同步補上防卡死文字格式
                         news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                         
                     if news_list:
@@ -162,11 +169,12 @@ def webhook2():
                 reply_message = "❌ 資料庫查詢出了點狀況，請稍後再試！"
                 
         return jsonify({
+            "fulfillmentText": reply_message,
             "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
         })
 
     # ==========================================================
-    # 情況 B：你自己用瀏覽器打開網址 (GET) ➡️ 毫無限制、極速塞滿大倉庫
+    # 情況 B：用瀏覽器打開網址 (GET) ➡️ 毫無限制、極速塞滿大倉庫
     # ==========================================================
     target_categories = {
         "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
@@ -208,8 +216,6 @@ def webhook2():
                         doc_id_hash = hashlib.md5(doc_id).hexdigest()
                         doc_ref = db.collection("news").document(doc_id_hash)
                         
-                        # 【超級核心加速修正】移除超慢、會導致 Vercel 超時斷線的 .get().exists 檢查。
-                        # 因為用網址 MD5 當 ID，如果重複，Firestore 自動會 set 覆蓋。預設存入 viewed: False！
                         doc_ref.set({
                             "category": cat_name,
                             "title": news_title,
