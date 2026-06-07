@@ -75,9 +75,6 @@ import json
 def ping():
     return "Wake up! 伺服器運作中！", 200
 
-# ==========================================================
-# 【優化版】新聞爬蟲與 Dialogflow 回覆路由
-# ==========================================================
 @app.route("/webhook2", methods=["GET", "POST"])
 def webhook2():
     # ==========================================================
@@ -106,10 +103,13 @@ def webhook2():
         
         if db:
             try:
+                # 🚀 【核心修正】導入新版規範的 FieldFilter，消滅 UserWarning 警告並加速
+                from google.cloud.firestore_v1.base_query import FieldFilter
+
                 # 1. 撈出該分類「尚未看過」的新聞（最前 5 則）
                 docs = db.collection("news")\
-                         .where("category", "==", target_cat)\
-                         .where("viewed", "==", False)\
+                         .filter(filter=FieldFilter("category", "==", target_cat))\
+                         .filter(filter=FieldFilter("viewed", "==", False))\
                          .limit(5)\
                          .stream() 
                          
@@ -123,8 +123,8 @@ def webhook2():
                 # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
                 if len(news_list) < 5:
                     all_viewed_docs = db.collection("news")\
-                                        .where("category", "==", target_cat)\
-                                        .where("viewed", "==", True)\
+                                        .filter(filter=FieldFilter("category", "==", target_cat))\
+                                        .filter(filter=FieldFilter("viewed", "==", True))\
                                         .stream()
                     batch = db.batch()
                     reset_count = 0
@@ -139,8 +139,8 @@ def webhook2():
                     
                     # 重置後重新補撈
                     retry_docs = db.collection("news")\
-                                   .where("category", "==", target_cat)\
-                                   .where("viewed", "==", False)\
+                                   .filter(filter=FieldFilter("category", "==", target_cat))\
+                                   .filter(filter=FieldFilter("viewed", "==", False))\
                                    .limit(5)\
                                    .stream()
                     chosen_docs = []
@@ -151,6 +151,7 @@ def webhook2():
                         news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                         
                     if news_list:
+                        # 🚀 【核心修正】明確指派重置提示，避免使用 += 導致未定義錯誤
                         reply_message = f"🔄 提示：【{target_cat}】的新聞已被您全數看過一遍，已為您重置大循環！\n\n"
                         
                 # 3. 把這次秀出來的 5 則標記為 viewed = True
@@ -161,80 +162,18 @@ def webhook2():
                     batch.commit()
                     
                 if news_list:
-                    reply_message += f"來吃【{target_cat}】新聞的瓜：\n\n" + "\n\n".join(news_list)
+                    # 🚀 【核心修正】安全疊加字串，若無重置提示則 reply_message 仍為空字串，不會出錯
+                    reply_message = reply_message + f"來吃【{target_cat}】新聞的瓜：\n\n" + "\n\n".join(news_list)
                 else:
                     reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開網頁發動爬蟲儲存資料！"
             except Exception as e:
                 print(f"撈取不重複新聞失敗: {e}")
-                reply_message = "❌ 資料庫查詢出了點狀況，請稍後再試！"
+                reply_message = f"❌ 資料庫查詢出了點狀況，請稍後再試！\n錯誤回報：{e}"
                 
         return jsonify({
             "fulfillmentText": reply_message,
             "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
         })
-
-    # ==========================================================
-    # 情況 B：用瀏覽器打開網址 (GET) ➡️ 毫無限制、極速塞滿大倉庫
-    # ==========================================================
-    target_categories = {
-        "AI科技": "https://www.ettoday.net/news_search.php?keywords=AI",
-        "3C": "https://game.ettoday.net/menu/3c/",
-        "財經": "https://finance.ettoday.net/",
-        "旅遊": "https://travel.ettoday.net/",
-        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
-    }
-    
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    
-    summary = {}
-    
-    for cat_name, cat_url in target_categories.items():
-        try:
-            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
-            
-            seen_urls = set()
-            count = 1
-            db_save_count = 0
-            
-            for link in news_links:
-                news_title = link.get_text().strip()
-                news_href = link.get('href', '')
-                if not news_title or len(news_title) < 10 or not news_href:
-                    continue
-                full_news_url = urljoin(cat_url, news_href)
-                
-                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                    seen_urls.add(full_news_url)
-                    
-                    if db:
-                        doc_id = json.dumps(full_news_url).encode('utf-8')
-                        doc_id_hash = hashlib.md5(doc_id).hexdigest()
-                        doc_ref = db.collection("news").document(doc_id_hash)
-                        
-                        doc_ref.set({
-                            "category": cat_name,
-                            "title": news_title,
-                            "url": full_news_url,
-                            "created_at": datetime.utcnow(),
-                            "viewed": False 
-                        })
-                        db_save_count += 1
-                    count += 1
-            summary[cat_name] = f"成功同步 {count-1} 則新聞至大倉庫"
-            time.sleep(0.3)
-        except Exception as e:
-            summary[cat_name] = f"失敗: {e}"
-            
-    return jsonify({
-        "status": "success",
-        "message": "大倉庫新聞同步更新完成！輪流閱覽機制已就緒！",
-        "result": summary
-    })
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
