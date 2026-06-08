@@ -230,48 +230,66 @@ def crawl_news():
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # 🚀【優化重點】：精準改良版選擇器，只抓主要區塊，完全屏除右側側邊欄及全站排行等社會雜訊
-            if "news_search.php" in cat_url:
-                # 針對 ETtoday 搜尋頁面（AI科技），鎖定主列表的外層 .archive_list 或 .part_pictxt_2
-                news_links = soup.select('.archive_list h3 a, .part_pictxt_2 h3 a')
+            # 🛡️ 防呆機制 1：預先初始化變數，確保不論走哪個分支，變數一定存在，絕不噴 UnboundLocalError
+            news_links = []
+            
+            # 🚀 精準改良版選擇器：擴大 AI 科技搜尋頁面的網址防禦範圍
+            if "search" in cat_url.lower() or cat_name == "AI科技":
+                # 針對 ETtoday 搜尋頁面（AI科技），鎖定主列表的外層 .archive_list 或 .part_pictxt_2 裡面的 a 標籤
+                news_links = soup.select('.archive_list h3 a, .part_pictxt_2 h3 a, .archive_list .title a')
             else:
-                # 針對其他分類頻道（3C、財經、旅遊、國際），只鎖定主要新聞區塊的元件標籤
+                # 針對其他正常的分類頻道（3C、財經、旅遊、國際）
                 news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a')
             
+            # 🛡️ 防呆機制 2：如果選擇器完全沒撈到東西，直接記錄並跳到下一個分類，不往下硬幹
+            if not news_links:
+                summary[cat_name] = "警告：網頁結構未抓到對應新聞標籤，同步 0 則"
+                continue
+                
             seen_urls = set()
             count = 1
             
             for link in news_links:
-                news_title = link.get_text().strip()
-                news_href = link.get('href', '')
-                if not news_title or len(news_title) < 10 or not news_href:
-                    continue
-                full_news_url = urljoin(cat_url, news_href)
-                
-                if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                    seen_urls.add(full_news_url)
+                # 🛡️ 防呆機制 3：個別新聞處理內置安全防線，單一新聞解析失敗不牽連整個爬蟲
+                try:
+                    news_title = link.get_text().strip()
+                    news_href = link.get('href', '')
                     
-                    if db:
-                        doc_id = json.dumps(full_news_url).encode('utf-8')
-                        doc_id_hash = hashlib.md5(doc_id).hexdigest()
-                        doc_ref = db.collection("news").document(doc_id_hash)
+                    if not news_title or len(news_title) < 10 or not news_href:
+                        continue
                         
-                        doc_ref.set({
-                            "category": cat_name,
-                            "title": news_title,
-                            "url": full_news_url,
-                            "created_at": datetime.utcnow(),
-                            "viewed": False  
-                        })
-                    count += 1
+                    full_news_url = urljoin(cat_url, news_href)
+                    
+                    if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
+                        seen_urls.add(full_news_url)
+                        
+                        if db:
+                            doc_id = json.dumps(full_news_url).encode('utf-8')
+                            doc_id_hash = hashlib.md5(doc_id).hexdigest()
+                            doc_ref = db.collection("news").document(doc_id_hash)
+                            
+                            doc_ref.set({
+                                "category": cat_name,
+                                "title": news_title,
+                                "url": full_news_url,
+                                "created_at": datetime.utcnow(),
+                                "viewed": False  
+                            })
+                        count += 1
+                except Exception as single_err:
+                    print(f"解析單條新聞時跳過一筆錯誤: {single_err}")
+                    continue
+                    
             summary[cat_name] = f"成功同步 {count-1} 則新聞至大倉庫"
             time.sleep(0.3)
+            
         except Exception as e:
-            summary[cat_name] = f"失敗: {e}"
+            # 🛡️ 防呆機制 4：大分類層級錯誤攔截，某一區網站若掛掉（例如 3C 網站維護），其他分類照樣能通！
+            summary[cat_name] = f"該分類同步失敗，錯誤原因: {e}"
             
     return jsonify({
         "status": "success",
-        "message": "大倉庫新聞同步更新完成！分家獨立架構運作就緒！",
+        "message": "大倉庫新聞同步更新完成！多層級防呆防線全面啟動！",
         "result": summary
     })
 @app.route("/webhook", methods=["POST"])
