@@ -114,14 +114,9 @@ def webhook2():
         elif "財經" in query_lower or "金融" in query_lower: target_cat = "財經"
         elif "旅遊" in query_lower or "玩" in query_lower: target_cat = "旅遊"
         elif "國際" in query_lower or "國外" in query_lower: target_cat = "國際"
-        # 💡【名稱修改點 1】：將判定成功的名稱改為 "AI科技與推薦"
-        elif "ai" in query_lower or "科技" in query_lower: target_cat = "AI科技與推薦"
+        elif "ai" in query_lower or "科技" in query_lower: target_cat = "AI科技"
         else:
-            target_cat = "AI科技與推薦"  
-            
-    # 💡【名稱修改點 2】：防呆防線！如果 Dialogflow 傳進來或原本是 "AI科技"，一律強制校正成全新主題標題
-    if target_cat == "AI科技":
-        target_cat = "AI科技與推薦"
+            target_cat = "AI科技"  
             
     reply_message = ""
     
@@ -215,79 +210,6 @@ def webhook2():
         "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
     })
 
-@app.route("/crawl", methods=["GET"])
-def crawl_news():
-    target_categories = {
-        # 💡【名稱修改點 3】：如果你的爬蟲抓下來也要同步更換分類標籤，這裡同步改成 "AI科技與推薦"
-        "AI科技與推薦": "https://www.ettoday.net/news_search.php?keywords=AI",
-        "3C": "https://game.ettoday.net/menu/3c/",
-        "財經": "https://finance.ettoday.net/",
-        "旅遊": "https://travel.ettoday.net/",
-        "國際": "https://www.ettoday.net/news/focus/%E5%9C%8B%E9%9A%9B/"
-    }
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
-    summary = {}
-    
-    for cat_name, cat_url in target_categories.items():
-        try:
-            response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
-            response.encoding = 'utf-8'
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # 🛡️ 防呆機制：預先初始化變數，防範 UnboundLocalError
-            news_links = []
-            
-            # 精準改良版選擇器：擴大防禦範圍並過濾雜訊
-            if "search" in cat_url.lower() or "ai" in cat_name.lower():
-                news_links = soup.select('.archive_list h3 a, .part_pictxt_2 h3 a, .archive_list .title a')
-            else:
-                news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a')
-            
-            if not news_links:
-                summary[cat_name] = "警告：未抓到對應新聞標籤，同步 0 則"
-                continue
-                
-            seen_urls = set()
-            count = 1
-            
-            for link in news_links:
-                try:
-                    news_title = link.get_text().strip()
-                    news_href = link.get('href', '')
-                    if not news_title or len(news_title) < 10 or not news_href:
-                        continue
-                    full_news_url = urljoin(cat_url, news_href)
-                    
-                    if full_news_url not in seen_urls and ("ettoday.net" in full_news_url):
-                        seen_urls.add(full_news_url)
-                        
-                        if db:
-                            doc_id = json.dumps(full_news_url).encode('utf-8')
-                            doc_id_hash = hashlib.md5(doc_id).hexdigest()
-                            doc_ref = db.collection("news").document(doc_id_hash)
-                            
-                            doc_ref.set({
-                                "category": cat_name,  # 這裡存進去的就是 "AI科技與推薦"
-                                "title": news_title,
-                                "url": full_news_url,
-                                "created_at": datetime.utcnow(),
-                                "viewed": False  
-                            })
-                        count += 1
-                except Exception as single_err:
-                    continue
-            summary[cat_name] = f"成功同步 {count-1} 則新聞至大倉庫"
-            time.sleep(0.3)
-        except Exception as e:
-            summary[cat_name] = f"失敗: {e}"
-            
-    return jsonify({
-        "status": "success",
-        "message": "大倉庫新聞同步更新完成！分家獨立架構運作就緒！",
-        "result": summary
-    })
 @app.route("/crawl", methods=["GET"])
 def crawl_news():
     target_categories = {
