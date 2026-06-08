@@ -72,7 +72,9 @@ def index():
 import json
 
 import time
-import traceback  # 🚀 導入追踪模組，用來抓出精準的錯誤行數
+import traceback  
+import time
+import traceback
 
 @app.route("/ping", methods=["GET"])
 def ping():
@@ -89,7 +91,7 @@ def ping():
 @app.route("/webhook2", methods=["POST"]) 
 def webhook2():
     start_time = time.time()  # ⏱️ 記錄進入路由的初始時間
-    checkpoints = []         # 📝 用來記錄各個檢查點的耗時
+    checkpoints = []         # 📝 用來記錄各個檢查點的耗時，準備列印在 Vercel
     
     req = request.get_json(silent=True, force=True)
     parameters = req.get("queryResult", {}).get("parameters", {})
@@ -176,19 +178,21 @@ def webhook2():
             elapsed_time = int((time.time() - start_time) * 1000)
             checkpoints.append(f"總執行完畢: {elapsed_time}ms")
             
+            # 🚀【移往後台】：直接用 print 印在 Vercel Logs 中，不干擾 LINE 畫面
+            print(f"📊 [Webhook 效能報告] 分類: {target_cat} | 總耗時: {elapsed_time} ms | 時序表: {', '.join(checkpoints)}")
+            
             if news_list:
+                # 💡 LINE 訊息最底部的反應時間已被完美註解拔除
                 reply_message = reply_message + f"來吃【{target_cat}】新聞的瓜：\n\n" + "\n\n".join(news_list)
-                # 🚀 平常正常運作時，低調顯示總耗時
-                reply_message = reply_message + f"\n\n⏱️ 系統回應速度：{elapsed_time} ms"
             else:
                 reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開 /crawl 網頁發動爬蟲儲存資料！"
                 
         except Exception as e:
-            # 🚨【方法三核心】：如果資料庫崩潰或超時，直接把詳細的 Traceback 與時序表炸在 LINE 上面
             error_line = traceback.format_exc()
             print(f"撈取不重複新聞失敗:\n{error_line}")
             
             elapsed_time = int((time.time() - start_time) * 1000)
+            # 💡 當真的出事時，LINE 警報器依然留著方便你 Debug
             reply_message = (
                 f"❌ 資料庫查詢出了點狀況，請稍後再試！\n"
                 f"⏱️ 總卡頓耗時：{elapsed_time} ms\n"
