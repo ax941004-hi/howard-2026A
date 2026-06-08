@@ -71,12 +71,14 @@ def index():
 
 import json
 
+import time
+import traceback  # 🚀 導入追踪模組，用來抓出精準的錯誤行數
+
 @app.route("/ping", methods=["GET"])
 def ping():
     # 🚀 進階防休眠：不只叫醒 Vercel，順便去 Firestore 敲敲門，防止資料庫斷線超時！
     if db:
         try:
-            # 隨便讀取 news 集合裡的 1 筆資料，強迫 Firestore 保持活躍與連線
             db.collection("news").limit(1).get()
             print("Firestore 叫醒成功！")
         except Exception as e:
@@ -86,6 +88,9 @@ def ping():
 
 @app.route("/webhook2", methods=["POST"]) 
 def webhook2():
+    start_time = time.time()  # ⏱️ 記錄進入路由的初始時間
+    checkpoints = []         # 📝 用來記錄各個檢查點的耗時
+    
     req = request.get_json(silent=True, force=True)
     parameters = req.get("queryResult", {}).get("parameters", {})
     target_cat = parameters.get("news", "")
@@ -107,7 +112,10 @@ def webhook2():
         try:
             from google.cloud.firestore_v1.base_query import FieldFilter
             
+            checkpoints.append(f"初始化防線完成: {int((time.time() - start_time) * 1000)}ms")
+            
             # 1. 撈出該分類「尚未看過」的新聞（最前 5 則）
+            db_start = time.time()
             docs = db.collection("news")\
                      .where(filter=FieldFilter("category", "==", target_cat))\
                      .where(filter=FieldFilter("viewed", "==", False))\
@@ -121,8 +129,11 @@ def webhook2():
                 data = doc.to_dict()
                 news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                 
+            checkpoints.append(f"第一次撈取Firestore結束: {int((time.time() - db_start) * 1000)}ms")
+                
             # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
             if len(news_list) < 5:
+                reset_start = time.time()
                 all_viewed_docs = db.collection("news")\
                                     .where(filter=FieldFilter("category", "==", target_cat))\
                                     .where(filter=FieldFilter("viewed", "==", True))\
@@ -151,6 +162,7 @@ def webhook2():
                     data = doc.to_dict()
                     news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                     
+                checkpoints.append(f"觸發大循環重置耗時: {int((time.time() - reset_start) * 1000)}ms")
                 if news_list:
                     reply_message = f"🔄 提示：【{target_cat}】的新聞已被您全數看過一遍，已為您重置大循環！\n\n"
                     
@@ -161,13 +173,28 @@ def webhook2():
                     batch.update(doc.reference, {"viewed": True})
                 batch.commit()
                 
+            elapsed_time = int((time.time() - start_time) * 1000)
+            checkpoints.append(f"總執行完畢: {elapsed_time}ms")
+            
             if news_list:
                 reply_message = reply_message + f"來吃【{target_cat}】新聞的瓜：\n\n" + "\n\n".join(news_list)
+                # 🚀 平常正常運作時，低調顯示總耗時
+                reply_message = reply_message + f"\n\n⏱️ 系統回應速度：{elapsed_time} ms"
             else:
                 reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開 /crawl 網頁發動爬蟲儲存資料！"
+                
         except Exception as e:
-            print(f"撈取不重複新聞失敗: {e}")
-            reply_message = f"❌ 資料庫查詢出了點狀況，請稍後再試！\n錯誤回報：{e}"
+            # 🚨【方法三核心】：如果資料庫崩潰或超時，直接把詳細的 Traceback 與時序表炸在 LINE 上面
+            error_line = traceback.format_exc()
+            print(f"撈取不重複新聞失敗:\n{error_line}")
+            
+            elapsed_time = int((time.time() - start_time) * 1000)
+            reply_message = (
+                f"❌ 資料庫查詢出了點狀況，請稍後再試！\n"
+                f"⏱️ 總卡頓耗時：{elapsed_time} ms\n"
+                f"📊 歷史時間點：{', '.join(checkpoints)}\n"
+                f"🐛 警報器精準回報：\n{str(e)}"
+            )
             
     return jsonify({
         "fulfillmentText": reply_message,
