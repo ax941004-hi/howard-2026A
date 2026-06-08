@@ -73,7 +73,16 @@ import json
 
 @app.route("/ping", methods=["GET"])
 def ping():
-    return "Wake up! 伺服器運作中！", 200
+    # 🚀 進階防休眠：不只叫醒 Vercel，順便去 Firestore 敲敲門，防止資料庫斷線超時！
+    if db:
+        try:
+            # 隨便讀取 news 集合裡的 1 筆資料，強迫 Firestore 保持活躍與連線
+            db.collection("news").limit(1).get()
+            print("Firestore 叫醒成功！")
+        except Exception as e:
+            print(f"Firestore 喚醒失敗: {e}")
+            
+    return "Wake up! 伺服器與資料庫全員運作中！", 200
 
 @app.route("/webhook2", methods=["POST"]) 
 def webhook2():
@@ -113,7 +122,6 @@ def webhook2():
                 news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                 
             # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
-            # 💡【已修正】：將大寫 Len 改為小寫 len
             if len(news_list) < 5:
                 all_viewed_docs = db.collection("news")\
                                     .where(filter=FieldFilter("category", "==", target_cat))\
@@ -166,7 +174,6 @@ def webhook2():
         "fulfillmentMessages": [{"text": {"text": [reply_message]}}]
     })
 
-# 💡【已修正】：刪除了路由末端誤觸的字母 Z
 @app.route("/crawl", methods=["GET"])
 def crawl_news():
     target_categories = {
@@ -211,7 +218,7 @@ def crawl_news():
                             "title": news_title,
                             "url": full_news_url,
                             "created_at": datetime.utcnow(),
-                            "viewed": False 
+                            "viewed": False  
                         })
                     count += 1
             summary[cat_name] = f"成功同步 {count-1} 則新聞至大倉庫"
