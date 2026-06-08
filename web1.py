@@ -76,6 +76,16 @@ import traceback
 import time
 import traceback
 
+import time
+import json
+import hashlib
+import traceback
+from datetime import datetime
+from flask import jsonify, request
+from bs4 import BeautifulSoup
+import requests
+from urllib.parse import urljoin
+
 @app.route("/ping", methods=["GET"])
 def ping():
     # 🚀 進階防休眠：不只叫醒 Vercel，順便去 Firestore 敲敲門，防止資料庫斷線超時！
@@ -133,23 +143,18 @@ def webhook2():
                 
             checkpoints.append(f"第一次撈取Firestore結束: {int((time.time() - db_start) * 1000)}ms")
                 
-            # 2. 如果不夠 5 則，說明看完了，觸發大循環重置
+            # 2. 💡【優化重點】：如果不到 5 則，說明看完了，直接乾淨重置該分類，徹底杜絕非同步時間差掉球
             if len(news_list) < 5:
                 reset_start = time.time()
                 all_viewed_docs = db.collection("news")\
                                     .where(filter=FieldFilter("category", "==", target_cat))\
                                     .where(filter=FieldFilter("viewed", "==", True))\
                                     .stream()
+                
                 batch = db.batch()
-                reset_count = 0
                 for d in all_viewed_docs:
                     batch.update(d.reference, {"viewed": False})
-                    reset_count += 1
-                    if reset_count >= 400:
-                        batch.commit()
-                        batch = db.batch()
-                        reset_count = 0
-                batch.commit()
+                batch.commit()  # 一口氣全部直球解鎖
                 
                 # 重置後重新補撈
                 retry_docs = db.collection("news")\
@@ -164,7 +169,7 @@ def webhook2():
                     data = doc.to_dict()
                     news_list.append(f"【{data.get('category')}】{data.get('title')}\n🔗 點我閱讀：{data.get('url')}")
                     
-                checkpoints.append(f"觸發大循環重置耗時: {int((time.time() - reset_start) * 1000)}ms")
+                checkpoints.append(f"簡化版大循環重置完畢: {int((time.time() - reset_start) * 1000)}ms")
                 if news_list:
                     reply_message = f"🔄 提示：【{target_cat}】的新聞已被您全數看過一遍，已為您重置大循環！\n\n"
                     
@@ -182,10 +187,10 @@ def webhook2():
             print(f"📊 [Webhook 效能報告] 分類: {target_cat} | 總耗時: {elapsed_time} ms | 時序表: {', '.join(checkpoints)}")
             
             if news_list:
-                # 💡 LINE 訊息最底部的反應時間已被完美註解拔除
                 reply_message = reply_message + f"來吃【{target_cat}】新聞的瓜：\n\n" + "\n\n".join(news_list)
             else:
-                reply_message = f"🔍 目前資料庫中還沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開 /crawl 網頁發動爬蟲儲存資料！"
+                # 🚀 雙重保障：如果資料庫完全空了，直接給出核心引導網址
+                reply_message = f"🔍 目前資料庫中暫時沒有【{target_cat}】的新聞喔！\n💡 請先用瀏覽器打開以下網址灌滿大倉庫：\nhttps://howard-2026-a.vercel.app/crawl"
                 
         except Exception as e:
             error_line = traceback.format_exc()
@@ -224,7 +229,14 @@ def crawl_news():
             response = requests.get(cat_url, headers=headers, timeout=10, verify=False)
             response.encoding = 'utf-8'
             soup = BeautifulSoup(response.text, 'html.parser')
-            news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a, h3 a, .title a')
+            
+            # 🚀【優化重點】：精準改良版選擇器，只抓主要區塊，完全屏除右側側邊欄及全站排行等社會雜訊
+            if "news_search.php" in cat_url:
+                # 針對 ETtoday 搜尋頁面（AI科技），鎖定主列表的外層 .archive_list 或 .part_pictxt_2
+                news_links = soup.select('.archive_list h3 a, .part_pictxt_2 h3 a')
+            else:
+                # 針對其他分類頻道（3C、財經、旅遊、國際），只鎖定主要新聞區塊的元件標籤
+                news_links = soup.select('.part_pictxt_2 h3 a, .part_list_2 h3 a, .part_menu_2 h3 a, .piece h3 a, .box_1 h3 a')
             
             seen_urls = set()
             count = 1
@@ -262,7 +274,6 @@ def crawl_news():
         "message": "大倉庫新聞同步更新完成！分家獨立架構運作就緒！",
         "result": summary
     })
-
 @app.route("/webhook", methods=["POST"])
 def webhook():
     req = request.get_json(force=True)
